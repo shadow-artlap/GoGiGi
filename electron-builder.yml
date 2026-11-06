@@ -15,7 +15,7 @@ files:
 # when building in GitHub Actions; set them explicitly if you build locally.
 publish:
   provider: github
-  owner: OWNER_PLACEHOLDER
+  owner: shadow-artlap
   repo: GoGiGi
   releaseType: release
 

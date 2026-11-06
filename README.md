@@ -34,13 +34,9 @@ npm run dev
 
 ## First-time GitHub setup
 
-1. Create a repo named **GoGiGi** on your account (or run `gh repo create`).
-2. Replace **`OWNER_PLACEHOLDER`** with your GitHub username in:
-   - `package.json` → `repository.url`
-   - `electron-builder.yml` → `publish.owner`
-   - `dev-app-update.yml` → `owner`
-   - `src/renderer/renderer.js` → `REPO_URL`
-3. Push the code:
+Repo: https://github.com/shadow-artlap/GoGiGi
+
+1. Push the code:
 
 ```bash
 git add .

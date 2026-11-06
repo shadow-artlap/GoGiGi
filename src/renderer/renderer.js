@@ -8,7 +8,7 @@ const btnCheck = $('btnCheck');
 const btnDownload = $('btnDownload');
 const btnInstall = $('btnInstall');
 
-const REPO_URL = 'https://github.com/OWNER_PLACEHOLDER/GoGiGi/releases';
+const REPO_URL = 'https://github.com/shadow-artlap/GoGiGi/releases';
 
 function setStatus(text) { statusEl.textContent = text; }
 function showBar(show) { barEl.style.display = show ? 'block' : 'none'; }
