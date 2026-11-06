@@ -278,29 +278,59 @@ function initChromium() {
 // ======================= UPDATES ==========================================
 const setStatus = (t) => { $('status').textContent = t; };
 const showUpBar = (b) => { $('upBar').style.display = b ? 'block' : 'none'; };
+function showUpdateNow(version) {
+  const b = $('btnUpdateNow');
+  b.textContent = version ? `อัปเดตเป็น v${version}` : 'อัปเดตเลย';
+  b.style.display = '';
+  b.disabled = false;
+  $('btnCheck').style.display = 'none';
+  $('btnRetry').style.display = 'none';
+}
+function resetUpdateButtons() {
+  $('btnUpdateNow').style.display = 'none';
+  $('btnRetry').style.display = 'none';
+  $('btnCheck').style.display = '';
+  $('btnCheck').disabled = false;
+}
+
 function initUpdates() {
   $('btnRefresh').addEventListener('click', loadSystem);
   $('repoLink').addEventListener('click', (e) => { e.preventDefault(); window.gogigi.openExternal(REPO_URL); });
+
   $('btnCheck').addEventListener('click', async () => {
     $('btnCheck').disabled = true; setStatus('กำลังตรวจหาอัปเดต…');
     const r = await window.gogigi.update.check();
-    if (!r.ok && r.reason === 'dev-mode') { setStatus('โหมด dev: auto-update ทำงานเฉพาะเวอร์ชันที่ติดตั้งแล้ว'); $('btnCheck').disabled = false; }
+    if (!r.ok && r.reason === 'dev-mode') { setStatus('โหมด dev: อัปเดตใช้ได้เฉพาะแอปที่ติดตั้งจริง (จาก installer)'); $('btnCheck').disabled = false; }
     else if (!r.ok) { setStatus('ตรวจอัปเดตไม่สำเร็จ: ' + r.reason); $('btnCheck').disabled = false; }
   });
-  $('btnDownload').addEventListener('click', async () => {
-    $('btnDownload').disabled = true; setStatus('กำลังเริ่มดาวน์โหลด…'); showUpBar(true);
+
+  // One-click: download, then auto-install & restart when ready.
+  $('btnUpdateNow').addEventListener('click', async () => {
+    $('btnUpdateNow').disabled = true; showUpBar(true); setStatus('กำลังดาวน์โหลดอัปเดต…');
     const r = await window.gogigi.update.download();
-    if (!r.ok) { setStatus('ดาวน์โหลดไม่สำเร็จ: ' + r.reason); showUpBar(false); }
+    if (!r.ok) { showUpBar(false); setStatus('ดาวน์โหลดไม่สำเร็จ: ' + r.reason); $('btnUpdateNow').disabled = false; }
   });
-  $('btnInstall').addEventListener('click', () => { setStatus('กำลังติดตั้งและรีสตาร์ท…'); window.gogigi.update.install(); });
+
+  $('btnRetry').addEventListener('click', () => { resetUpdateButtons(); setStatus('พร้อมใช้งาน'); });
+
   window.gogigi.update.onStatus((s) => {
     switch (s.state) {
-      case 'checking': setStatus('กำลังตรวจหาอัปเดต…'); break;
-      case 'up-to-date': setStatus(`เป็นเวอร์ชันล่าสุดแล้ว (v${s.version})`); $('btnCheck').disabled = false; break;
-      case 'available': setStatus(`มีเวอร์ชันใหม่: v${s.version}`); $('btnDownload').disabled = false; $('btnCheck').disabled = false; break;
-      case 'downloading': showUpBar(true); $('upBarFill').style.width = (s.percent || 0) + '%'; setStatus(`กำลังดาวน์โหลด… ${s.percent || 0}%`); break;
-      case 'downloaded': showUpBar(false); setStatus(`ดาวน์โหลดเสร็จ (v${s.version}) — พร้อมติดตั้ง`); $('btnInstall').disabled = false; break;
-      case 'error': showUpBar(false); setStatus('ข้อผิดพลาด: ' + s.message); $('btnCheck').disabled = false; break;
+      case 'checking':
+        setStatus('กำลังตรวจหาอัปเดต…'); break;
+      case 'up-to-date':
+        resetUpdateButtons(); setStatus(`เป็นเวอร์ชันล่าสุดแล้ว (v${s.version}) ✓`); break;
+      case 'available':
+        setStatus(`มีเวอร์ชันใหม่: v${s.version}`); showUpdateNow(s.version); break;
+      case 'downloading':
+        showUpBar(true); $('upBarFill').style.width = (s.percent || 0) + '%';
+        setStatus(`กำลังดาวน์โหลด… ${s.percent || 0}%`); break;
+      case 'downloaded':
+        showUpBar(false); setStatus(`ดาวน์โหลดเสร็จ (v${s.version}) — กำลังติดตั้งและรีสตาร์ท…`);
+        setTimeout(() => window.gogigi.update.install(), 800); break;
+      case 'error':
+        showUpBar(false); setStatus('ข้อผิดพลาด: ' + s.message);
+        $('btnUpdateNow').style.display = 'none'; $('btnRetry').style.display = '';
+        $('btnCheck').style.display = ''; $('btnCheck').disabled = false; break;
     }
   });
 }
