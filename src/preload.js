@@ -27,6 +27,25 @@ contextBridge.exposeInMainWorld('gogigi', {
     },
   },
 
+  profiles: {
+    list: () => ipcRenderer.invoke('profiles:list'),
+    create: (data) => ipcRenderer.invoke('profiles:create', data),
+    update: (id, data) => ipcRenderer.invoke('profiles:update', { id, data }),
+    remove: (id) => ipcRenderer.invoke('profiles:remove', id),
+    launch: (id) => ipcRenderer.invoke('profiles:launch', id),
+    stop: (id) => ipcRenderer.invoke('profiles:stop', id),
+    openDir: (id) => ipcRenderer.invoke('profiles:openDir', id),
+    onChange: (cb) => {
+      const h = () => typeof cb === 'function' && cb();
+      ipcRenderer.on('profiles:changed', h);
+      return () => ipcRenderer.removeListener('profiles:changed', h);
+    },
+  },
+
+  browsers: {
+    list: () => ipcRenderer.invoke('browsers:list'),
+  },
+
   update: {
     check: () => ipcRenderer.invoke('update:check'),
     download: () => ipcRenderer.invoke('update:download'),

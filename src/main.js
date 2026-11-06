@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const log = require('electron-log');
 const { autoUpdater } = require('electron-updater');
+const profiles = require('./profiles');
 
 // --- Logging ---------------------------------------------------------------
 log.transports.file.level = 'info';
@@ -139,6 +140,16 @@ ipcMain.handle('theme:get', () => ({
   dark: nativeTheme.shouldUseDarkColors,
 }));
 
+// --- IPC: profiles ---------------------------------------------------------
+ipcMain.handle('profiles:list', () => profiles.list());
+ipcMain.handle('profiles:create', (_e, data) => profiles.create(data));
+ipcMain.handle('profiles:update', (_e, { id, data }) => profiles.update(id, data));
+ipcMain.handle('profiles:remove', (_e, id) => profiles.remove(id));
+ipcMain.handle('profiles:launch', (_e, id) => profiles.launch(id));
+ipcMain.handle('profiles:stop', (_e, id) => profiles.stop(id));
+ipcMain.handle('profiles:openDir', (_e, id) => shell.openPath(profiles.openDir(id)));
+ipcMain.handle('browsers:list', () => profiles.browsers());
+
 // --- IPC: updates ----------------------------------------------------------
 ipcMain.handle('update:check', async () => {
   if (isDev) return { ok: false, reason: 'dev-mode' };
@@ -167,6 +178,8 @@ if (!gotLock) {
 
   app.whenReady().then(() => {
     applyTheme(readSettings().theme);
+    profiles.init(app);
+    profiles.setOnChange(() => send('profiles:changed'));
     createWindow();
 
     if (!isDev) {
