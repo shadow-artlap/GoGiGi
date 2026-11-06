@@ -1,0 +1,5 @@
+# Used by electron-updater only in development to simulate the publish target.
+# Packaged builds ignore this and use the config baked in by electron-builder.
+provider: github
+owner: OWNER_PLACEHOLDER
+repo: GoGiGi

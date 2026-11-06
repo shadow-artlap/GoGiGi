@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; style-src 'unsafe-inline'; script-src 'self';" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GoGiGi</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh;
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      background: radial-gradient(1200px 600px at 50% -10%, #1b2030 0%, #0f1117 60%);
+      color: #e6e8ee; display: flex; align-items: center; justify-content: center;
+    }
+    .card {
+      width: min(560px, 92vw); padding: 40px 36px; border-radius: 18px;
+      background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08);
+      box-shadow: 0 20px 60px rgba(0,0,0,0.4); text-align: center;
+    }
+    .logo { font-size: 44px; font-weight: 800; letter-spacing: -1px;
+      background: linear-gradient(90deg, #6ea8fe, #b388ff); -webkit-background-clip: text;
+      background-clip: text; color: transparent; margin: 0 0 4px; }
+    .ver { color: #8b93a7; font-size: 14px; margin-bottom: 28px; }
+    .status {
+      min-height: 24px; margin: 20px 0; font-size: 14px; color: #aeb6c8;
+    }
+    .bar { height: 8px; border-radius: 999px; background: rgba(255,255,255,0.08);
+      overflow: hidden; margin: 10px 0 0; display: none; }
+    .bar > i { display: block; height: 100%; width: 0%;
+      background: linear-gradient(90deg, #6ea8fe, #b388ff); transition: width .2s; }
+    .row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 18px; }
+    button {
+      appearance: none; border: 1px solid rgba(255,255,255,0.12); cursor: pointer;
+      background: rgba(255,255,255,0.06); color: #e6e8ee; padding: 10px 18px;
+      border-radius: 10px; font-size: 14px; font-weight: 600; transition: .15s;
+    }
+    button:hover:not(:disabled) { background: rgba(255,255,255,0.12); transform: translateY(-1px); }
+    button.primary { background: linear-gradient(90deg, #4f7dfb, #8a5cff); border-color: transparent; }
+    button:disabled { opacity: .45; cursor: default; }
+    a { color: #6ea8fe; text-decoration: none; }
+    .foot { margin-top: 26px; font-size: 12px; color: #6b7390; }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <h1 class="logo">GoGiGi</h1>
+    <div class="ver">เวอร์ชัน <span id="version">…</span></div>
+
+    <div class="status" id="status">พร้อมใช้งาน</div>
+    <div class="bar" id="bar"><i id="barFill"></i></div>
+
+    <div class="row">
+      <button class="primary" id="btnCheck">ตรวจหาอัปเดต</button>
+      <button id="btnDownload" disabled>ดาวน์โหลด</button>
+      <button id="btnInstall" disabled>ติดตั้ง &amp; รีสตาร์ท</button>
+    </div>
+
+    <div class="foot">
+      อัปเดตผ่าน GitHub Releases ·
+      <a href="#" id="repoLink">เปิดหน้า releases</a>
+    </div>
+  </main>
+  <script src="renderer.js"></script>
+</body>
+</html>

@@ -1,0 +1,36 @@
+appId: com.gogigi.app
+productName: GoGiGi
+copyright: Copyright © 2026 GoGiGi
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - src/**/*
+  - package.json
+
+# Where auto-updates are published to and read from.
+# owner/repo are filled in automatically from package.json "repository"
+# when building in GitHub Actions; set them explicitly if you build locally.
+publish:
+  provider: github
+  owner: OWNER_PLACEHOLDER
+  repo: GoGiGi
+  releaseType: release
+
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  # icon: build/icon.ico   # add a 256x256 .ico here when you have one
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+
+# Generates latest.yml alongside the installer so electron-updater can
+# detect new versions from GitHub Releases.

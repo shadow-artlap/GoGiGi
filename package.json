@@ -1,0 +1,28 @@
+{
+  "name": "gogigi",
+  "version": "0.1.0",
+  "description": "GoGiGi — Electron desktop app with GitHub-based auto-update",
+  "main": "src/main.js",
+  "author": "GoGiGi",
+  "license": "MIT",
+  "private": true,
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OWNER_PLACEHOLDER/GoGiGi.git"
+  },
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "release": "electron-builder --publish always"
+  },
+  "devDependencies": {
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8"
+  },
+  "dependencies": {
+    "electron-log": "^5.2.0",
+    "electron-updater": "^6.3.9"
+  }
+}
