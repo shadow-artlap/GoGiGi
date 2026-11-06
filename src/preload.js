@@ -46,6 +46,17 @@ contextBridge.exposeInMainWorld('gogigi', {
     list: () => ipcRenderer.invoke('browsers:list'),
   },
 
+  chromium: {
+    status: () => ipcRenderer.invoke('chromium:status'),
+    ensure: () => ipcRenderer.invoke('chromium:ensure'),
+    remove: () => ipcRenderer.invoke('chromium:remove'),
+    onProgress: (cb) => {
+      const h = (_e, d) => typeof cb === 'function' && cb(d);
+      ipcRenderer.on('chromium:progress', h);
+      return () => ipcRenderer.removeListener('chromium:progress', h);
+    },
+  },
+
   update: {
     check: () => ipcRenderer.invoke('update:check'),
     download: () => ipcRenderer.invoke('update:download'),

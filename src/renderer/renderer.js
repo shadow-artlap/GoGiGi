@@ -71,9 +71,12 @@ function renderProfiles() {
 async function onProfileAction(act, id) {
   const p = allProfiles.find((x) => x.id === id);
   if (act === 'launch') {
+    if (p && p.browser === 'bundled' && !chromiumInstalled) {
+      alert('ครั้งแรกจะดาวน์โหลด GoGiGi Chromium (~150MB) อาจใช้เวลาสักครู่ — ดูความคืบหน้าได้ที่แท็บ Settings');
+    }
     const r = await window.gogigi.profiles.launch(id);
     if (!r.ok) alert('เปิดไม่สำเร็จ: ' + r.reason);
-    await loadProfiles();
+    await Promise.all([loadProfiles(), refreshChromium()]);
   } else if (act === 'stop') {
     await window.gogigi.profiles.stop(id);
     await loadProfiles();
@@ -219,6 +222,59 @@ async function initSettings() {
 $('btnOpenData').addEventListener('click', () => window.gogigi.system.openPath('userData'));
 $('btnOpenLogs').addEventListener('click', () => window.gogigi.system.openPath('logs'));
 
+// ======================= BUNDLED CHROMIUM =================================
+let chromiumInstalled = false;
+
+async function refreshChromium() {
+  const s = await window.gogigi.chromium.status();
+  chromiumInstalled = !!s.installed;
+  const desc = $('chromiumDesc');
+  const btn = $('btnChromium');
+  btn.disabled = false;
+  if (s.installed) {
+    desc.textContent = `ติดตั้งแล้ว (build ${s.buildId})`;
+    btn.textContent = 'ลบ';
+    btn.classList.add('danger');
+  } else {
+    desc.textContent = 'ยังไม่ได้ดาวน์โหลด (~150MB, โหลดครั้งแรกครั้งเดียว)';
+    btn.textContent = 'ดาวน์โหลด';
+    btn.classList.remove('danger');
+  }
+}
+
+async function downloadChromium() {
+  const btn = $('btnChromium');
+  btn.disabled = true;
+  $('chrBar').style.display = 'block';
+  $('chromiumDesc').textContent = 'กำลังเริ่มดาวน์โหลด…';
+  const r = await window.gogigi.chromium.ensure();
+  $('chrBar').style.display = 'none';
+  if (!r.ok) { $('chromiumDesc').textContent = 'ดาวน์โหลดไม่สำเร็จ: ' + r.reason; btn.disabled = false; }
+  await refreshChromium();
+}
+
+function initChromium() {
+  window.gogigi.chromium.onProgress(({ dl, total }) => {
+    if (total) {
+      const pct = Math.round((dl / total) * 100);
+      $('chrBar').style.display = 'block';
+      $('chrBarFill').style.width = pct + '%';
+      $('chromiumDesc').textContent = `กำลังดาวน์โหลด Chromium… ${pct}%`;
+    }
+  });
+  $('btnChromium').addEventListener('click', async () => {
+    if (chromiumInstalled) {
+      if (confirm('ลบ Chromium ที่ดาวน์โหลดไว้?')) {
+        await window.gogigi.chromium.remove();
+        await refreshChromium();
+      }
+    } else {
+      await downloadChromium();
+    }
+  });
+  refreshChromium();
+}
+
 // ======================= UPDATES ==========================================
 const setStatus = (t) => { $('status').textContent = t; };
 const showUpBar = (b) => { $('upBar').style.display = b ? 'block' : 'none'; };
@@ -257,6 +313,7 @@ async function init() {
   } catch { $('version').textContent = '?'; }
   initProfilesUI();
   await initSettings();
+  initChromium();
   initUpdates();
   await loadProfiles();
 }

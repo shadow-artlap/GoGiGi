@@ -7,6 +7,7 @@ const os = require('os');
 const log = require('electron-log');
 const { autoUpdater } = require('electron-updater');
 const profiles = require('./profiles');
+const chromium = require('./chromium');
 
 // --- Logging ---------------------------------------------------------------
 log.transports.file.level = 'info';
@@ -145,10 +146,24 @@ ipcMain.handle('profiles:list', () => profiles.list());
 ipcMain.handle('profiles:create', (_e, data) => profiles.create(data));
 ipcMain.handle('profiles:update', (_e, { id, data }) => profiles.update(id, data));
 ipcMain.handle('profiles:remove', (_e, id) => profiles.remove(id));
-ipcMain.handle('profiles:launch', (_e, id) => profiles.launch(id));
+ipcMain.handle('profiles:launch', async (_e, id) => {
+  const profile = profiles.list().find((x) => x.id === id);
+  if (profile && profile.browser === 'bundled') {
+    const r = await chromium.ensure((dl, total) => send('chromium:progress', { dl, total }));
+    if (!r.ok) return { ok: false, reason: 'chromium: ' + r.reason };
+    return profiles.launch(id, r.path);
+  }
+  return profiles.launch(id);
+});
 ipcMain.handle('profiles:stop', (_e, id) => profiles.stop(id));
 ipcMain.handle('profiles:openDir', (_e, id) => shell.openPath(profiles.openDir(id)));
 ipcMain.handle('browsers:list', () => profiles.browsers());
+
+// --- IPC: bundled Chromium -------------------------------------------------
+ipcMain.handle('chromium:status', () => chromium.status());
+ipcMain.handle('chromium:ensure', () =>
+  chromium.ensure((dl, total) => send('chromium:progress', { dl, total })));
+ipcMain.handle('chromium:remove', () => chromium.remove());
 
 // --- IPC: updates ----------------------------------------------------------
 ipcMain.handle('update:check', async () => {
@@ -179,6 +194,7 @@ if (!gotLock) {
   app.whenReady().then(() => {
     applyTheme(readSettings().theme);
     profiles.init(app);
+    chromium.init(app.getPath('userData'));
     profiles.setOnChange(() => send('profiles:changed'));
     createWindow();
 

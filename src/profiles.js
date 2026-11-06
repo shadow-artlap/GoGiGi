@@ -42,7 +42,7 @@ function newProfile(data = {}) {
     id,
     name: data.name || 'New Profile',
     group: data.group || '',
-    browser: data.browser === 'edge' ? 'edge' : 'chrome',
+    browser: ['bundled', 'chrome', 'edge'].includes(data.browser) ? data.browser : 'bundled',
     proxy: normalizeProxy(data.proxy),
     userAgent: data.userAgent || '',
     startUrl: data.startUrl || '',
@@ -81,7 +81,7 @@ function update(id, data) {
     ...items[i],
     name: data.name ?? items[i].name,
     group: data.group ?? items[i].group,
-    browser: data.browser === 'edge' ? 'edge' : (data.browser === 'chrome' ? 'chrome' : items[i].browser),
+    browser: ['bundled', 'chrome', 'edge'].includes(data.browser) ? data.browser : items[i].browser,
     proxy: data.proxy !== undefined ? normalizeProxy(data.proxy) : items[i].proxy,
     userAgent: data.userAgent ?? items[i].userAgent,
     startUrl: data.startUrl ?? items[i].startUrl,
@@ -121,7 +121,8 @@ function resolveBrowser(which) {
   return null;
 }
 function browsers() {
-  const out = [];
+  // Bundled Chromium is always selectable (downloaded on first use).
+  const out = [{ id: 'bundled', name: 'GoGiGi Chromium (bundled)', path: null }];
   const c = resolveBrowser('chrome');
   const e = resolveBrowser('edge');
   if (c) out.push({ id: 'chrome', name: 'Google Chrome', path: c });
@@ -176,12 +177,12 @@ function buildArgs(profile) {
   return args;
 }
 
-function launch(id) {
+function launch(id, exeOverride) {
   if (running.has(id)) return { ok: false, reason: 'already-running' };
   const items = readIndex();
   const profile = items.find((x) => x.id === id);
   if (!profile) return { ok: false, reason: 'not-found' };
-  const exe = resolveBrowser(profile.browser);
+  const exe = exeOverride || resolveBrowser(profile.browser);
   if (!exe) return { ok: false, reason: `browser-not-found: ${profile.browser}` };
 
   const args = buildArgs(profile);
