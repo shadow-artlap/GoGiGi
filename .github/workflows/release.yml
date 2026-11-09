@@ -29,4 +29,9 @@ jobs:
         env:
           # Provided automatically by Actions; lets electron-builder upload assets.
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Code signing (optional): add these repo secrets to sign the installer.
+          # CSC_LINK = base64 of your .pfx certificate; CSC_KEY_PASSWORD = its password.
+          # electron-builder signs when present and skips silently when empty.
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
         run: npx electron-builder --win --publish always

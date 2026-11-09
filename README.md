@@ -69,12 +69,44 @@ npm run dist          # build installer into release/ (no publish)
 npm run release
 ```
 
+## Fingerprint
+
+Each profile runs on the bundled/installed browser with a per-profile fingerprint
+applied over CDP before any page script runs: timezone, locale, geolocation,
+user-agent, screen metrics, hardware, WebGL vendor/renderer, canvas/audio noise,
+and WebRTC policy. The patched functions report `[native code]`, so the overrides
+are not visible to `toString`/descriptor inspection. Set a proxy and use
+**ทดสอบ proxy** to auto-match timezone/locale/geo to the exit IP.
+
+> This is JS/CDP-level hardening — strong against the JS fingerprinting most sites
+> use. A fully patched Chromium build (C++-level spoofing) is a separate, large
+> project (hours-long source build on your own infrastructure) and is out of scope
+> for this repo's CI.
+
+## Code signing (remove the SmartScreen warning)
+
+Unsigned installers trigger a Windows SmartScreen warning on first run. The
+release workflow signs automatically once you provide a certificate — no code
+change needed:
+
+1. Get a **code signing certificate** (`.pfx`) from a CA (SSL.com, Sectigo,
+   DigiCert…). An **EV** certificate clears SmartScreen immediately; an **OV**
+   one builds reputation over downloads. A cheaper token-free option is
+   **Azure Trusted Signing**.
+2. Base64-encode the `.pfx`:
+   ```bash
+   # PowerShell
+   [Convert]::ToBase64String([IO.File]::ReadAllBytes("cert.pfx")) | Set-Clipboard
+   ```
+3. In the GitHub repo → **Settings → Secrets and variables → Actions**, add:
+   - `CSC_LINK` — the base64 string from step 2
+   - `CSC_KEY_PASSWORD` — the certificate's password
+4. Cut the next release as usual. electron-builder detects the secrets and signs
+   the installer; with no secrets it builds unsigned (no error).
+
 ## Notes
 
-- Windows installers are unsigned by default; SmartScreen may warn on first run.
-  Add code signing later via `electron-builder` if needed.
-- Add an app icon at `build/icon.ico` (256×256) and uncomment the `icon:` line in
-  `electron-builder.yml`.
+- App icon lives at `build/icon.ico`.
 
 ## License
 

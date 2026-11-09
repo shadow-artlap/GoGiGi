@@ -19,12 +19,14 @@ function seedFromId(id) {
 }
 
 // Build the JS injected on every new document to spoof browser fingerprints.
+// "Hardened": broad surface coverage, plus the patched functions report
+// "[native code]" so the overrides are not detectable by toString inspection.
 function buildInjection(fp, seed) {
-  // Values are inlined as JSON so the page script is self-contained.
   const cfg = {
     seed,
     languages: fp.locale ? [fp.locale, fp.locale.split('-')[0]] : null,
     platform: fp.uaPlatform || null,
+    vendor: fp.vendor || 'Google Inc.',
     hardwareConcurrency: fp.hardwareConcurrency || null,
     deviceMemory: fp.deviceMemory || null,
     screen: fp.screen && fp.screen.width ? fp.screen : null,
@@ -35,60 +37,107 @@ function buildInjection(fp, seed) {
   };
   return `(() => {
   const C = ${JSON.stringify(cfg)};
-  const def = (obj, prop, val) => { try { Object.defineProperty(obj, prop, { get: () => val, configurable: true }); } catch(e){} };
-  // webdriver
-  try { Object.defineProperty(navigator, 'webdriver', { get: () => false }); } catch(e){}
-  if (C.languages) { def(navigator, 'languages', C.languages); def(navigator, 'language', C.languages[0]); }
-  if (C.platform) def(navigator, 'platform', C.platform);
-  if (C.hardwareConcurrency) def(navigator, 'hardwareConcurrency', C.hardwareConcurrency);
-  if (C.deviceMemory) def(navigator, 'deviceMemory', C.deviceMemory);
+  // ---- make patched functions report [native code] ----
+  const _toString = Function.prototype.toString;
+  const native = new WeakMap();
+  const tag = (fn, name) => { try { native.set(fn, name || (fn && fn.name) || ''); } catch(e){} return fn; };
+  const patchedToString = function toString() {
+    if (native.has(this)) return 'function ' + native.get(this) + '() { [native code] }';
+    return _toString.call(this);
+  };
+  tag(patchedToString, 'toString');
+  try { Function.prototype.toString = patchedToString; } catch(e){}
+
+  const defGet = (obj, prop, val) => {
+    try {
+      const g = function () { return val; }; tag(g, 'get ' + prop);
+      Object.defineProperty(obj, prop, { get: g, configurable: true, enumerable: true });
+    } catch(e){}
+  };
+  const patch = (obj, name, make) => {
+    try {
+      const orig = obj && obj[name];
+      if (typeof orig !== 'function') return;
+      const fn = make(orig); tag(fn, name);
+      obj[name] = fn;
+    } catch(e){}
+  };
+
+  // ---- navigator ----
+  try { defGet(Navigator.prototype, 'webdriver', false); } catch(e){ defGet(navigator, 'webdriver', false); }
+  if (C.languages) { defGet(navigator, 'languages', Object.freeze(C.languages.slice())); defGet(navigator, 'language', C.languages[0]); }
+  if (C.platform) defGet(navigator, 'platform', C.platform);
+  if (C.vendor) defGet(navigator, 'vendor', C.vendor);
+  if (C.hardwareConcurrency) defGet(navigator, 'hardwareConcurrency', C.hardwareConcurrency);
+  if (C.deviceMemory) defGet(navigator, 'deviceMemory', C.deviceMemory);
+
+  // ---- screen ----
   if (C.screen) {
-    def(screen, 'width', C.screen.width); def(screen, 'height', C.screen.height);
-    def(screen, 'availWidth', C.screen.width); def(screen, 'availHeight', C.screen.height - 40);
+    defGet(screen, 'width', C.screen.width); defGet(screen, 'height', C.screen.height);
+    defGet(screen, 'availWidth', C.screen.width); defGet(screen, 'availHeight', Math.max(0, C.screen.height - 48));
+    defGet(screen, 'colorDepth', 24); defGet(screen, 'pixelDepth', 24);
   }
-  // Seeded PRNG
-  let s = Math.floor(C.seed * 1e9) || 123456789;
-  const rnd = () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff; };
-  // Canvas noise
+
+  // ---- permissions / Notification consistency (classic headless tell) ----
+  try {
+    if (navigator.permissions && navigator.permissions.query) {
+      patch(navigator.permissions, 'query', (orig) => function (p) {
+        if (p && p.name === 'notifications') return Promise.resolve({ state: Notification.permission, onchange: null });
+        return orig.call(this, p);
+      });
+    }
+  } catch(e){}
+
+  // ---- seeded PRNG ----
+  let s = (Math.floor(C.seed * 1e9) || 123456789) >>> 0;
+  const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+
+  // ---- canvas noise (deterministic per profile, undetectable wrappers) ----
   if (C.canvasNoise) {
-    const noisify = (canvas) => {
+    const _get = CanvasRenderingContext2D.prototype.getImageData;
+    const _put = CanvasRenderingContext2D.prototype.putImageData;
+    const perturb = (canvas) => {
       try {
         const ctx = canvas.getContext('2d'); if (!ctx) return;
-        const w = canvas.width, h = canvas.height; if (!w || !h) return;
-        const img = ctx.getImageData(0, 0, w, h);
-        for (let i = 0; i < img.data.length; i += Math.floor(rnd()*997)+503) {
-          img.data[i] = img.data[i] ^ (Math.floor(rnd()*2));
-        }
-        ctx.putImageData(img, 0, 0);
+        const w = canvas.width, h = canvas.height; if (!w || !h || w * h > 4000000) return;
+        const img = _get.call(ctx, 0, 0, w, h); const d = img.data;
+        for (let i = 0; i < d.length; i += (Math.floor(rnd() * 673) + 311) * 4) { d[i] = d[i] ^ (rnd() < 0.5 ? 1 : 0); }
+        _put.call(ctx, img, 0, 0);
       } catch(e){}
     };
-    const toDataURL = HTMLCanvasElement.prototype.toDataURL;
-    HTMLCanvasElement.prototype.toDataURL = function(...a){ noisify(this); return toDataURL.apply(this, a); };
-    const toBlob = HTMLCanvasElement.prototype.toBlob;
-    HTMLCanvasElement.prototype.toBlob = function(...a){ noisify(this); return toBlob.apply(this, a); };
-    const getImageData = CanvasRenderingContext2D.prototype.getImageData;
-    CanvasRenderingContext2D.prototype.getImageData = function(...a){
-      const d = getImageData.apply(this, a);
-      for (let i = 0; i < d.data.length; i += Math.floor(rnd()*1499)+701) { d.data[i] = d.data[i] ^ 1; }
+    patch(HTMLCanvasElement.prototype, 'toDataURL', (o) => function () { perturb(this); return o.apply(this, arguments); });
+    patch(HTMLCanvasElement.prototype, 'toBlob', (o) => function () { perturb(this); return o.apply(this, arguments); });
+    patch(CanvasRenderingContext2D.prototype, 'getImageData', (o) => function () {
+      const d = o.apply(this, arguments);
+      try { const a = d.data; for (let i = 0; i < a.length; i += (Math.floor(rnd() * 1009) + 503) * 4) { a[i] = a[i] ^ 1; } } catch(e){}
       return d;
-    };
+    });
   }
-  // WebGL vendor/renderer
+
+  // ---- WebGL vendor / renderer ----
   if (C.webglVendor || C.webglRenderer) {
-    const patch = (proto) => {
-      const gp = proto.getParameter;
-      proto.getParameter = function(p){
-        if (p === 37445 && C.webglVendor) return C.webglVendor;   // UNMASKED_VENDOR_WEBGL
-        if (p === 37446 && C.webglRenderer) return C.webglRenderer; // UNMASKED_RENDERER_WEBGL
-        return gp.call(this, p);
-      };
-    };
-    try { patch(WebGLRenderingContext.prototype); } catch(e){}
-    try { patch(WebGL2RenderingContext.prototype); } catch(e){}
+    const gl = (proto) => patch(proto, 'getParameter', (o) => function (p) {
+      if (p === 37445 && C.webglVendor) return C.webglVendor;    // UNMASKED_VENDOR_WEBGL
+      if (p === 37446 && C.webglRenderer) return C.webglRenderer; // UNMASKED_RENDERER_WEBGL
+      return o.call(this, p);
+    });
+    try { gl(WebGLRenderingContext.prototype); } catch(e){}
+    try { gl(WebGL2RenderingContext.prototype); } catch(e){}
   }
-  // WebRTC disable
+
+  // ---- AudioContext subtle noise ----
+  try {
+    if (window.AnalyserNode) {
+      patch(AnalyserNode.prototype, 'getFloatFrequencyData', (o) => function (arr) {
+        o.call(this, arr);
+        try { for (let i = 0; i < arr.length; i += 97) arr[i] = arr[i] + (rnd() - 0.5) * 1e-3; } catch(e){}
+      });
+    }
+  } catch(e){}
+
+  // ---- WebRTC disable ----
   if (C.webrtcDisabled) {
-    try { window.RTCPeerConnection = undefined; window.webkitRTCPeerConnection = undefined; } catch(e){}
+    try { defGet(window, 'RTCPeerConnection', undefined); defGet(window, 'webkitRTCPeerConnection', undefined); } catch(e){}
   }
   })();`;
 }
@@ -182,4 +231,4 @@ async function stop(id) {
 
 function isRunning(id) { return running.has(id); }
 
-module.exports = { launch, stop, isRunning, setOnChange };
+module.exports = { launch, stop, isRunning, setOnChange, buildInjection };
