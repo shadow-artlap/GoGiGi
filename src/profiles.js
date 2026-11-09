@@ -90,6 +90,7 @@ function newProfile(d = {}) {
     extensions: toArray(d.extensions),
     tags: toArray(d.tags),
     remark: d.remark || '',
+    proxyInfo: d.proxyInfo || null,
     createdAt: Date.now(),
     lastUsedAt: null,
   };
@@ -124,9 +125,19 @@ function update(id, d) {
     extensions: d.extensions !== undefined ? toArray(d.extensions) : cur.extensions,
     tags: d.tags !== undefined ? toArray(d.tags) : cur.tags,
     remark: d.remark ?? cur.remark,
+    proxyInfo: d.proxyInfo !== undefined ? d.proxyInfo : cur.proxyInfo,
   };
   writeIndex(items);
   return { ok: true, profile: withRunning(items[i]) };
+}
+
+function setProxyInfo(id, info) {
+  const items = readIndex();
+  const p = items.find((x) => x.id === id);
+  if (!p) return { ok: false, reason: 'not-found' };
+  p.proxyInfo = info;
+  writeIndex(items);
+  return { ok: true };
 }
 function remove(id) {
   if (fingerprint.isRunning(id)) return { ok: false, reason: 'running' };
@@ -222,6 +233,6 @@ function openDir(id) { return profileDir(id); }
 function setOnChange(fn) { fingerprint.setOnChange(fn); }
 
 module.exports = {
-  init, list, get, create, update, remove, removeMany, setGroupMany,
+  init, list, get, create, update, remove, removeMany, setGroupMany, setProxyInfo,
   browsers, launch, stop, openDir, setOnChange,
 };

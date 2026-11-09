@@ -185,6 +185,11 @@
           <div class="field"><label>Proxy user</label><input type="text" id="f_puser" /></div>
           <div class="field"><label>Proxy password</label><input type="text" id="f_ppass" /></div>
         </div>
+        <div class="field-row" style="align-items:center;">
+          <button class="btn sm" id="f_proxyTest" type="button">🔍 ทดสอบ proxy</button>
+          <span id="f_proxyResult" class="small muted"></span>
+        </div>
+        <label class="chk"><input type="checkbox" id="f_autofp" checked /> ซิงค์ fingerprint (timezone/locale/geo) ให้ตรงกับ proxy อัตโนมัติ</label>
 
         <div class="fsec">Fingerprint</div>
         <div class="field">

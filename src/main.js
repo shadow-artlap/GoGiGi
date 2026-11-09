@@ -10,6 +10,7 @@ const profiles = require('./profiles');
 const chromium = require('./chromium');
 const groups = require('./groups');
 const extensions = require('./extensions');
+const proxytest = require('./proxytest');
 
 // --- Logging ---------------------------------------------------------------
 log.transports.file.level = 'info';
@@ -162,6 +163,19 @@ ipcMain.handle('profiles:openDir', (_e, id) => shell.openPath(profiles.openDir(i
 ipcMain.handle('profiles:removeMany', (_e, ids) => profiles.removeMany(ids));
 ipcMain.handle('profiles:setGroupMany', (_e, { ids, group }) => profiles.setGroupMany(ids, group));
 ipcMain.handle('browsers:list', () => profiles.browsers());
+
+// --- IPC: proxy test -------------------------------------------------------
+ipcMain.handle('proxy:test', (_e, proxy) => proxytest.test(proxy));
+ipcMain.handle('proxy:testProfile', async (_e, id) => {
+  const p = profiles.get(id);
+  if (!p) return { ok: false, reason: 'not-found' };
+  const r = await proxytest.test(p.proxy);
+  if (r.ok) profiles.setProxyInfo(id, {
+    ip: r.ip, country: r.country, countryCode: r.countryCode,
+    flag: r.flag, timezone: r.timezone, latency: r.latency, testedAt: r.testedAt,
+  });
+  return r;
+});
 
 // --- IPC: groups -----------------------------------------------------------
 ipcMain.handle('groups:list', () => groups.list());

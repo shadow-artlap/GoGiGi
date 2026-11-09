@@ -23,9 +23,21 @@ document.querySelectorAll('nav.tabs button').forEach((btn) => {
 // ======================= PROFILES =========================================
 let allProfiles = [], allGroups = [], allExtensions = [], browsersList = [];
 let selected = new Set();
+let lastProxyInfo = null;
 
 const proxySummary = (p) => (!p || !p.host) ? '<span class="muted">ไม่มี proxy</span>'
   : `${esc(p.scheme)}://${esc(p.host)}:${esc(p.port)}${p.username ? ' 🔒' : ''}`;
+const proxyCell = (p) => {
+  let h = proxySummary(p.proxy);
+  if (p.proxyInfo && p.proxyInfo.ip) {
+    h += `<div class="subacct">${p.proxyInfo.flag || ''} ${esc(p.proxyInfo.ip)}${p.proxyInfo.country ? ' · ' + esc(p.proxyInfo.country) : ''}${p.proxyInfo.latency ? ' · ' + p.proxyInfo.latency + 'ms' : ''}</div>`;
+  }
+  return h;
+};
+const readProxyForm = () => {
+  const host = $('f_phost').value.trim();
+  return host ? { scheme: $('f_pscheme').value, host, port: $('f_pport').value.trim(), username: $('f_puser').value.trim(), password: $('f_ppass').value } : null;
+};
 const fpSummary = (f) => {
   if (!f) return '<span class="muted">-</span>';
   const bits = [];
@@ -68,7 +80,7 @@ function renderTable() {
         ${platformCell(p)}
       </td>
       <td>${p.group ? `<span class="tag">${esc(p.group)}</span>` : '<span class="muted">—</span>'}</td>
-      <td class="small">${proxySummary(p.proxy)}</td>
+      <td class="small">${proxyCell(p)}</td>
       <td class="small">${fpSummary(p.fingerprint)}</td>
       <td class="small">${(p.tags || []).map((t) => `<span class="tag">${esc(t)}</span>`).join(' ') || '<span class="muted">—</span>'}</td>
       <td class="small muted">${fmtDate(p.createdAt)}</td>
@@ -76,6 +88,7 @@ function renderTable() {
         ${p.running
           ? `<button class="btn sm" data-act="stop" data-id="${p.id}">หยุด</button>`
           : `<button class="btn sm primary" data-act="launch" data-id="${p.id}">เปิด</button>`}
+        <button class="btn sm" data-act="iptest" data-id="${p.id}" title="ทดสอบ proxy" ${p.proxy ? '' : 'disabled'}>🌐</button>
         <button class="btn sm" data-act="edit" data-id="${p.id}">แก้ไข</button>
         <button class="btn sm" data-act="dir" data-id="${p.id}" title="โฟลเดอร์">📁</button>
         <button class="btn sm danger" data-act="del" data-id="${p.id}">ลบ</button>
@@ -104,6 +117,11 @@ async function onAction(act, id) {
     const r = await window.gogigi.profiles.launch(id);
     if (!r.ok) alert('เปิดไม่สำเร็จ: ' + r.reason);
     await Promise.all([loadProfiles(), refreshChromium()]);
+  } else if (act === 'iptest') {
+    const r = await window.gogigi.proxy.testProfile(id);
+    if (!r.ok) alert('ทดสอบ proxy ไม่สำเร็จ: ' + r.reason);
+    else alert(`${r.flag || ''} ${r.ip}\n${r.country}${r.city ? ' · ' + r.city : ''}\nTimezone: ${r.timezone}\nLatency: ${r.latency}ms`);
+    await loadProfiles();
   } else if (act === 'stop') { await window.gogigi.profiles.stop(id); await loadProfiles(); }
   else if (act === 'edit') { openModal(p); }
   else if (act === 'dir') { window.gogigi.profiles.openDir(id); }
@@ -180,6 +198,9 @@ async function openModal(p) {
   const px = (ed && p.proxy) || {};
   $('f_pscheme').value = px.scheme || 'http'; $('f_phost').value = px.host || ''; $('f_pport').value = px.port || '';
   $('f_puser').value = px.username || ''; $('f_ppass').value = px.password || '';
+  lastProxyInfo = ed ? (p.proxyInfo || null) : null;
+  $('f_proxyResult').textContent = lastProxyInfo ? `✓ ${lastProxyInfo.flag || ''} ${lastProxyInfo.ip}${lastProxyInfo.country ? ' · ' + lastProxyInfo.country : ''}` : '';
+  $('f_autofp').checked = true;
   const f = (ed && p.fingerprint) || {};
   setWebrtc(f.webrtc || 'proxy-udp');
   $('f_ua').value = f.userAgent || ''; $('f_uaplat').value = f.uaPlatform || '';
@@ -219,6 +240,7 @@ function readModal() {
     extensions: selExt,
     tags: $('f_tags').value,
     remark: $('f_remark').value.trim(),
+    proxyInfo: host ? lastProxyInfo : null,
   };
 }
 async function saveModal() {
@@ -249,6 +271,20 @@ function initProfilesUI() {
   $('modalSave').addEventListener('click', saveModal);
   $('modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
   document.querySelectorAll('#f_webrtc button').forEach((b) => b.addEventListener('click', () => setWebrtc(b.dataset.webrtc)));
+  $('f_proxyTest').addEventListener('click', async () => {
+    const proxy = readProxyForm();
+    if (!proxy) { $('f_proxyResult').textContent = 'ใส่ host/port ก่อน'; return; }
+    $('f_proxyResult').textContent = 'กำลังทดสอบ…';
+    const r = await window.gogigi.proxy.test(proxy);
+    if (!r.ok) { $('f_proxyResult').textContent = '❌ ' + r.reason; lastProxyInfo = null; return; }
+    $('f_proxyResult').textContent = `✓ ${r.flag || ''} ${r.ip} · ${r.country} · ${r.latency}ms`;
+    lastProxyInfo = { ip: r.ip, country: r.country, countryCode: r.countryCode, flag: r.flag, timezone: r.timezone, latency: r.latency, testedAt: r.testedAt };
+    if ($('f_autofp').checked) {
+      if (r.timezone) $('f_tz').value = r.timezone;
+      if (r.locale) $('f_locale').value = r.locale;
+      if (r.lat != null) { $('f_geolat').value = r.lat; $('f_geolon').value = r.lon; }
+    }
+  });
   $('gmodalClose').addEventListener('click', () => $('gmodal').style.display = 'none');
   $('gmodalDone').addEventListener('click', () => $('gmodal').style.display = 'none');
   $('g_add').addEventListener('click', async () => {

@@ -48,6 +48,11 @@ contextBridge.exposeInMainWorld('gogigi', {
     list: () => ipcRenderer.invoke('browsers:list'),
   },
 
+  proxy: {
+    test: (proxy) => ipcRenderer.invoke('proxy:test', proxy),
+    testProfile: (id) => ipcRenderer.invoke('proxy:testProfile', id),
+  },
+
   groups: {
     list: () => ipcRenderer.invoke('groups:list'),
     create: (name) => ipcRenderer.invoke('groups:create', name),
