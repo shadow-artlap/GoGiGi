@@ -6,6 +6,7 @@
 // scripts run. The browser stays open and user-driven; we only inject.
 
 const puppeteer = require('puppeteer-core');
+const startpage = require('./startpage');
 
 // profileId -> { browser }
 const running = new Map();
@@ -143,7 +144,7 @@ function buildInjection(fp, seed) {
 }
 
 async function launch(opts) {
-  const { id, exePath, userDataDir, extraArgs = [], proxy, fp = {}, tabs = [], startUrl } = opts;
+  const { id, exePath, userDataDir, extraArgs = [], proxy, fp = {}, tabs = [], meta = {} } = opts;
   if (running.has(id)) return { ok: false, reason: 'already-running' };
 
   const args = [
@@ -203,19 +204,22 @@ async function launch(opts) {
   if (fp.geo && fp.geo.lat != null) {
     try {
       const ctx = browser.defaultBrowserContext();
-      await ctx.overridePermissions(startUrl || 'https://www.google.com', ['geolocation']);
+      await ctx.overridePermissions((tabs && tabs[0]) || 'https://www.google.com', ['geolocation']);
     } catch (e) {}
   }
 
-  // Open tabs / start URL
-  const urls = (tabs && tabs.length) ? tabs : (startUrl ? [startUrl] : []);
+  // First tab: GoGiGi start page (local) — exit IP/geo, account, 2FA, fingerprint.
   try {
     const pages = await browser.pages();
-    for (let i = 0; i < urls.length; i++) {
-      const pg = (i === 0 && pages[0]) ? pages[0] : await browser.newPage();
-      pg.goto(urls[i], { waitUntil: 'domcontentloaded', timeout: 0 }).catch(() => {});
+    const first = pages[0] || await browser.newPage();
+    const html = startpage.buildHtml(meta, fp);
+    await first.setContent(html, { waitUntil: 'domcontentloaded' }).catch(() => {});
+    // Any configured start tabs open as additional tabs.
+    for (const u of (tabs || [])) {
+      const pg = await browser.newPage();
+      pg.goto(u, { waitUntil: 'domcontentloaded', timeout: 0 }).catch(() => {});
     }
-  } catch (e) {}
+  } catch (e) { /* ignore */ }
 
   browser.on('disconnected', () => { running.delete(id); if (onChange) onChange(); });
   return { ok: true };

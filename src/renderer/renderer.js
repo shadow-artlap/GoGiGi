@@ -38,13 +38,19 @@ let allProfiles = [], allGroups = [], allExtensions = [], browsersList = [];
 let selected = new Set();
 let launching = new Set();
 let lastProxyInfo = null;
+let proxyUse = {};
 
 const proxySummary = (p) => (!p || !p.host) ? '<span class="muted">ไม่มี</span>'
   : `<span class="mono">${esc(p.host)}:${esc(p.port)}</span>${p.username ? ' 🔒' : ''}`;
+const proxyKey = (px) => (px && px.host) ? `${px.host}:${px.port}` : '';
 const proxyCell = (p) => {
   let h = proxySummary(p.proxy);
   if (p.proxyInfo && p.proxyInfo.ip) {
     h += `<div class="sub"><span class="flag">${p.proxyInfo.flag || ''}</span> <span class="mono">${esc(p.proxyInfo.ip)}</span>${p.proxyInfo.country ? ' · ' + esc(p.proxyInfo.country) : ''}${p.proxyInfo.latency ? ' · ' + p.proxyInfo.latency + 'ms' : ''}</div>`;
+  }
+  const k = proxyKey(p.proxy);
+  if (k && proxyUse[k] > 1) {
+    h += `<div class="sub warn">⚠ ใช้ร่วม ${proxyUse[k]} โปรไฟล์</div>`;
   }
   return h;
 };
@@ -84,6 +90,8 @@ function visibleProfiles() {
 
 function renderTable() {
   const items = visibleProfiles();
+  proxyUse = {};
+  for (const p of allProfiles) { const k = proxyKey(p.proxy); if (k) proxyUse[k] = (proxyUse[k] || 0) + 1; }
   $('profileCount').textContent = `${items.length}/${allProfiles.length}`;
   const has = allProfiles.length > 0;
   $('profileEmpty').style.display = has ? 'none' : 'block';

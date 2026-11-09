@@ -229,3 +229,5 @@ input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px}
   .content{padding:16px}
   .topbar{padding:14px 16px}
 }
+
+.ptable .sub.warn{color:var(--warn)}

@@ -10,6 +10,7 @@ const path = require('path');
 const crypto = require('crypto');
 const fingerprint = require('./fingerprint');
 const extensions = require('./extensions');
+const fpgen = require('./fpgen');
 
 let USERDATA = '';
 let PROFILES_DIR = '';
@@ -212,15 +213,22 @@ async function launch(id, exeOverride) {
     extraArgs.push(`--load-extension=${extPaths.join(',')}`);
   }
 
+  // Effective fingerprint: distinct per profile (even behind the same proxy).
+  const eff = fpgen.effective(id, profile.fingerprint || {});
+  const meta = {
+    name: profile.name, id, profileNo: profile.id, group: profile.group,
+    platform: profile.platform, remark: profile.remark, tags: profile.tags,
+    proxyType: profile.proxy ? `${profile.proxy.scheme}://${profile.proxy.host}:${profile.proxy.port}` : 'No Proxy',
+  };
   const r = await fingerprint.launch({
     id,
     exePath: exe,
     userDataDir: dir,
     extraArgs,
     proxy: profile.proxy,
-    fp: profile.fingerprint || {},
+    fp: eff,
+    meta,
     tabs: profile.tabs || [],
-    startUrl: (profile.tabs && profile.tabs[0]) || '',
   });
   if (r.ok) {
     profile.lastUsedAt = Date.now();
