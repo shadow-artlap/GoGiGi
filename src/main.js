@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, shell, nativeTheme } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, nativeTheme, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -8,6 +8,8 @@ const log = require('electron-log');
 const { autoUpdater } = require('electron-updater');
 const profiles = require('./profiles');
 const chromium = require('./chromium');
+const groups = require('./groups');
+const extensions = require('./extensions');
 
 // --- Logging ---------------------------------------------------------------
 log.transports.file.level = 'info';
@@ -157,7 +159,27 @@ ipcMain.handle('profiles:launch', async (_e, id) => {
 });
 ipcMain.handle('profiles:stop', (_e, id) => profiles.stop(id));
 ipcMain.handle('profiles:openDir', (_e, id) => shell.openPath(profiles.openDir(id)));
+ipcMain.handle('profiles:removeMany', (_e, ids) => profiles.removeMany(ids));
+ipcMain.handle('profiles:setGroupMany', (_e, { ids, group }) => profiles.setGroupMany(ids, group));
 ipcMain.handle('browsers:list', () => profiles.browsers());
+
+// --- IPC: groups -----------------------------------------------------------
+ipcMain.handle('groups:list', () => groups.list());
+ipcMain.handle('groups:create', (_e, name) => groups.create(name));
+ipcMain.handle('groups:rename', (_e, { id, name }) => groups.rename(id, name));
+ipcMain.handle('groups:remove', (_e, id) => groups.remove(id));
+
+// --- IPC: extensions -------------------------------------------------------
+ipcMain.handle('extensions:list', () => extensions.list());
+ipcMain.handle('extensions:add', async () => {
+  const r = await dialog.showOpenDialog({
+    title: 'เลือกโฟลเดอร์ extension (ที่แตกแล้ว)',
+    properties: ['openDirectory'],
+  });
+  if (r.canceled || !r.filePaths[0]) return { ok: false, reason: 'canceled' };
+  return extensions.add(r.filePaths[0]);
+});
+ipcMain.handle('extensions:remove', (_e, id) => extensions.remove(id));
 
 // --- IPC: bundled Chromium -------------------------------------------------
 ipcMain.handle('chromium:status', () => chromium.status());
@@ -195,6 +217,8 @@ if (!gotLock) {
     applyTheme(readSettings().theme);
     profiles.init(app);
     chromium.init(app.getPath('userData'));
+    groups.init(app.getPath('userData'));
+    extensions.init(app.getPath('userData'));
     profiles.setOnChange(() => send('profiles:changed'));
     createWindow();
 

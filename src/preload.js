@@ -35,6 +35,8 @@ contextBridge.exposeInMainWorld('gogigi', {
     launch: (id) => ipcRenderer.invoke('profiles:launch', id),
     stop: (id) => ipcRenderer.invoke('profiles:stop', id),
     openDir: (id) => ipcRenderer.invoke('profiles:openDir', id),
+    removeMany: (ids) => ipcRenderer.invoke('profiles:removeMany', ids),
+    setGroupMany: (ids, group) => ipcRenderer.invoke('profiles:setGroupMany', { ids, group }),
     onChange: (cb) => {
       const h = () => typeof cb === 'function' && cb();
       ipcRenderer.on('profiles:changed', h);
@@ -44,6 +46,19 @@ contextBridge.exposeInMainWorld('gogigi', {
 
   browsers: {
     list: () => ipcRenderer.invoke('browsers:list'),
+  },
+
+  groups: {
+    list: () => ipcRenderer.invoke('groups:list'),
+    create: (name) => ipcRenderer.invoke('groups:create', name),
+    rename: (id, name) => ipcRenderer.invoke('groups:rename', { id, name }),
+    remove: (id) => ipcRenderer.invoke('groups:remove', id),
+  },
+
+  extensions: {
+    list: () => ipcRenderer.invoke('extensions:list'),
+    add: () => ipcRenderer.invoke('extensions:add'),
+    remove: (id) => ipcRenderer.invoke('extensions:remove', id),
   },
 
   chromium: {
