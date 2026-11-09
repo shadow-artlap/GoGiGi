@@ -7,13 +7,26 @@ const fmtBytes = (n) => { if (!n && n !== 0) return '-'; const u = ['B','KB','MB
 const fmtUptime = (s) => { const d=Math.floor(s/86400),h=Math.floor((s%86400)/3600),m=Math.floor((s%3600)/60); return [d&&`${d}d`,h&&`${h}h`,`${m}m`].filter(Boolean).join(' '); };
 const fmtDate = (t) => t ? new Date(t).toLocaleDateString() + ' ' + new Date(t).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '-';
 
-// ---- tabs -----------------------------------------------------------------
-document.querySelectorAll('nav.tabs button').forEach((btn) => {
+// ---- toast ----------------------------------------------------------------
+function toast(title, sub, kind) {
+  const el = document.createElement('div');
+  el.className = 'toast ' + (kind || '');
+  el.innerHTML = `<span class="bar-i"></span><div class="tx"><div class="tt"></div>${sub ? '<div class="ts"></div>' : ''}</div>`;
+  el.querySelector('.tt').textContent = title;
+  if (sub) el.querySelector('.ts').textContent = sub;
+  $('toasts').appendChild(el);
+  setTimeout(() => { el.style.opacity = '0'; el.style.transform = 'translateY(8px)'; setTimeout(() => el.remove(), 250); }, kind === 'err' ? 5200 : 3400);
+}
+
+// ---- nav ------------------------------------------------------------------
+const TITLES = { profiles: 'โปรไฟล์', extensions: 'Extensions', dashboard: 'ภาพรวม', settings: 'ตั้งค่า', updates: 'อัปเดต' };
+document.querySelectorAll('.side-nav button').forEach((btn) => {
   btn.addEventListener('click', () => {
-    document.querySelectorAll('nav.tabs button').forEach((b) => b.classList.remove('active'));
+    document.querySelectorAll('.side-nav button').forEach((b) => b.classList.remove('active'));
     document.querySelectorAll('.view').forEach((v) => v.classList.remove('active'));
     btn.classList.add('active');
     $(`view-${btn.dataset.tab}`).classList.add('active');
+    $('pageTitle').textContent = TITLES[btn.dataset.tab] || '';
     if (btn.dataset.tab === 'profiles') loadProfiles();
     if (btn.dataset.tab === 'extensions') loadExtensions();
     if (btn.dataset.tab === 'dashboard') loadSystem();
@@ -23,14 +36,15 @@ document.querySelectorAll('nav.tabs button').forEach((btn) => {
 // ======================= PROFILES =========================================
 let allProfiles = [], allGroups = [], allExtensions = [], browsersList = [];
 let selected = new Set();
+let launching = new Set();
 let lastProxyInfo = null;
 
-const proxySummary = (p) => (!p || !p.host) ? '<span class="muted">ไม่มี proxy</span>'
-  : `${esc(p.scheme)}://${esc(p.host)}:${esc(p.port)}${p.username ? ' 🔒' : ''}`;
+const proxySummary = (p) => (!p || !p.host) ? '<span class="muted">ไม่มี</span>'
+  : `<span class="mono">${esc(p.host)}:${esc(p.port)}</span>${p.username ? ' 🔒' : ''}`;
 const proxyCell = (p) => {
   let h = proxySummary(p.proxy);
   if (p.proxyInfo && p.proxyInfo.ip) {
-    h += `<div class="subacct">${p.proxyInfo.flag || ''} ${esc(p.proxyInfo.ip)}${p.proxyInfo.country ? ' · ' + esc(p.proxyInfo.country) : ''}${p.proxyInfo.latency ? ' · ' + p.proxyInfo.latency + 'ms' : ''}</div>`;
+    h += `<div class="sub"><span class="flag">${p.proxyInfo.flag || ''}</span> <span class="mono">${esc(p.proxyInfo.ip)}</span>${p.proxyInfo.country ? ' · ' + esc(p.proxyInfo.country) : ''}${p.proxyInfo.latency ? ' · ' + p.proxyInfo.latency + 'ms' : ''}</div>`;
   }
   return h;
 };
@@ -47,10 +61,10 @@ const fpSummary = (f) => {
   if (f.canvasNoise !== false) bits.push('canvas✓');
   return esc(bits.join(' · '));
 };
-const platformCell = (p) => {
+const platformSub = (p) => {
   const plat = p.platform;
   if (!plat || (!plat.name && !plat.account)) return '';
-  return `<div class="subacct">${esc(plat.name || '')}${plat.account ? ' · ' + esc(plat.account) : ''}</div>`;
+  return ` · ${esc(plat.name || '')}${plat.account ? ' ' + esc(plat.account) : ''}`;
 };
 
 function currentFilterGroup() { return $('groupFilter').value; }
@@ -70,30 +84,42 @@ function visibleProfiles() {
 
 function renderTable() {
   const items = visibleProfiles();
-  $('profileCount').textContent = `${allProfiles.length} โปรไฟล์`;
-  $('profileEmpty').style.display = allProfiles.length ? 'none' : 'block';
-  $('profileRows').innerHTML = items.map((p) => `
+  $('profileCount').textContent = `${items.length}/${allProfiles.length}`;
+  const has = allProfiles.length > 0;
+  $('profileEmpty').style.display = has ? 'none' : 'block';
+  $('tablewrap').style.display = has ? '' : 'none';
+  $('profileRows').innerHTML = items.map((p) => {
+    const isLaunching = launching.has(p.id);
+    const dot = p.running ? 'on' : (isLaunching ? 'loading' : '');
+    const primary = isLaunching
+      ? `<button class="btn sm" disabled>กำลังเปิด…</button>`
+      : (p.running
+        ? `<button class="btn sm" data-act="stop" data-id="${p.id}">หยุด</button>`
+        : `<button class="btn sm primary" data-act="launch" data-id="${p.id}">เปิด</button>`);
+    return `
     <tr>
       <td><input type="checkbox" class="rowchk" data-id="${p.id}" ${selected.has(p.id) ? 'checked' : ''} /></td>
       <td>
-        <div class="pname"><span class="dot ${p.running ? 'on' : ''}"></span>${esc(p.name)}</div>
-        ${platformCell(p)}
+        <div class="pname"><span class="dot ${dot}"></span>${esc(p.name)}</div>
+        <div class="sub"><span class="id-chip">${esc(p.id)}</span>${platformSub(p)}</div>
       </td>
       <td>${p.group ? `<span class="tag">${esc(p.group)}</span>` : '<span class="muted">—</span>'}</td>
       <td class="small">${proxyCell(p)}</td>
       <td class="small">${fpSummary(p.fingerprint)}</td>
       <td class="small">${(p.tags || []).map((t) => `<span class="tag">${esc(t)}</span>`).join(' ') || '<span class="muted">—</span>'}</td>
-      <td class="small muted">${fmtDate(p.createdAt)}</td>
+      <td class="small">${fmtDate(p.createdAt)}</td>
       <td class="acts">
-        ${p.running
-          ? `<button class="btn sm" data-act="stop" data-id="${p.id}">หยุด</button>`
-          : `<button class="btn sm primary" data-act="launch" data-id="${p.id}">เปิด</button>`}
-        <button class="btn sm" data-act="iptest" data-id="${p.id}" title="ทดสอบ proxy" ${p.proxy ? '' : 'disabled'}>🌐</button>
-        <button class="btn sm" data-act="edit" data-id="${p.id}">แก้ไข</button>
-        <button class="btn sm" data-act="dir" data-id="${p.id}" title="โฟลเดอร์">📁</button>
-        <button class="btn sm danger" data-act="del" data-id="${p.id}">ลบ</button>
+        ${primary}
+        <span class="rowbtns">
+          <button class="btn sm ghost" data-act="iptest" data-id="${p.id}" title="ทดสอบ proxy" ${p.proxy ? '' : 'disabled'}>🌐</button>
+          <button class="btn sm ghost" data-act="edit" data-id="${p.id}">แก้ไข</button>
+          <button class="btn sm ghost" data-act="dir" data-id="${p.id}" title="เปิดโฟลเดอร์">📁</button>
+          <button class="btn sm danger" data-act="del" data-id="${p.id}" title="ลบ">ลบ</button>
+        </span>
       </td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
+  updateLive();
   $('profileRows').querySelectorAll('button[data-act]').forEach((b) => b.addEventListener('click', () => onAction(b.dataset.act, b.dataset.id)));
   $('profileRows').querySelectorAll('.rowchk').forEach((c) => c.addEventListener('change', () => {
     if (c.checked) selected.add(c.dataset.id); else selected.delete(c.dataset.id);
@@ -110,24 +136,36 @@ function updateBulk() {
   $('bulkCount').textContent = `เลือก ${selected.size} รายการ`;
 }
 
+function updateLive() {
+  const n = allProfiles.filter((p) => p.running).length;
+  $('livePill').classList.toggle('on', n > 0);
+  $('liveCount').textContent = n > 0 ? `${n} โปรไฟล์กำลังเปิดอยู่` : 'ไม่มีโปรไฟล์ที่เปิดอยู่';
+  $('btnCloseAll').style.display = n > 0 ? '' : 'none';
+}
+
 async function onAction(act, id) {
   const p = allProfiles.find((x) => x.id === id);
   if (act === 'launch') {
-    if (p && p.browser === 'bundled' && !chromiumInstalled) alert('ครั้งแรกจะดาวน์โหลด GoGiGi Chromium (~150MB) — ดู progress ที่ Settings');
+    if (launching.has(id)) return;
+    launching.add(id); renderTable();
+    if (p && p.browser === 'bundled' && !chromiumInstalled) toast('กำลังเตรียม Chromium', 'ครั้งแรกจะดาวน์โหลด ~150MB — ดูความคืบหน้าที่ ตั้งค่า');
     const r = await window.gogigi.profiles.launch(id);
-    if (!r.ok) alert('เปิดไม่สำเร็จ: ' + r.reason);
+    launching.delete(id);
+    if (!r.ok) toast('เปิดไม่สำเร็จ', r.reason, 'err');
+    else toast('เปิดโปรไฟล์แล้ว', p.name, 'ok');
     await Promise.all([loadProfiles(), refreshChromium()]);
   } else if (act === 'iptest') {
+    toast('กำลังทดสอบ proxy', p.name);
     const r = await window.gogigi.proxy.testProfile(id);
-    if (!r.ok) alert('ทดสอบ proxy ไม่สำเร็จ: ' + r.reason);
-    else alert(`${r.flag || ''} ${r.ip}\n${r.country}${r.city ? ' · ' + r.city : ''}\nTimezone: ${r.timezone}\nLatency: ${r.latency}ms`);
+    if (!r.ok) toast('ทดสอบ proxy ไม่สำเร็จ', r.reason, 'err');
+    else toast(`${r.flag || ''} ${r.ip}`, `${r.country}${r.city ? ' · ' + r.city : ''} · ${r.latency}ms`, 'ok');
     await loadProfiles();
   } else if (act === 'stop') { await window.gogigi.profiles.stop(id); await loadProfiles(); }
   else if (act === 'edit') { openModal(p); }
   else if (act === 'dir') { window.gogigi.profiles.openDir(id); }
   else if (act === 'del') {
-    if (p.running) { alert('ปิดโปรไฟล์ก่อนจึงจะลบได้'); return; }
-    if (confirm(`ลบโปรไฟล์ "${p.name}"?`)) { await window.gogigi.profiles.remove(id); await loadProfiles(); }
+    if (p.running) { toast('ปิดโปรไฟล์ก่อน', 'ต้องหยุดโปรไฟล์ก่อนจึงจะลบได้', 'err'); return; }
+    if (confirm(`ลบโปรไฟล์ "${p.name}"?`)) { await window.gogigi.profiles.remove(id); await loadProfiles(); toast('ลบแล้ว', p.name); }
   }
 }
 
@@ -251,6 +289,13 @@ async function saveModal() {
 
 function initProfilesUI() {
   $('btnNewProfile').addEventListener('click', () => openModal(null));
+  $('btnNewProfile2').addEventListener('click', () => openModal(null));
+  $('btnCloseAll').addEventListener('click', async () => {
+    const run = allProfiles.filter((p) => p.running);
+    for (const p of run) await window.gogigi.profiles.stop(p.id);
+    toast('ปิดทั้งหมดแล้ว', `${run.length} โปรไฟล์`);
+    await loadProfiles();
+  });
   $('searchProfiles').addEventListener('input', renderTable);
   $('groupFilter').addEventListener('change', () => { selected.clear(); renderTable(); });
   $('btnManageGroups').addEventListener('click', openGroups);
@@ -260,11 +305,12 @@ function initProfilesUI() {
     renderTable();
   });
   $('bulkMove').addEventListener('click', async () => {
+    const n = selected.size;
     await window.gogigi.profiles.setGroupMany([...selected], $('bulkGroup').value);
-    selected.clear(); await loadProfiles();
+    selected.clear(); await loadProfiles(); toast('ย้ายกลุ่มแล้ว', `${n} โปรไฟล์`);
   });
   $('bulkDelete').addEventListener('click', async () => {
-    if (confirm(`ลบ ${selected.size} โปรไฟล์ที่เลือก?`)) { await window.gogigi.profiles.removeMany([...selected]); selected.clear(); await loadProfiles(); }
+    if (confirm(`ลบ ${selected.size} โปรไฟล์ที่เลือก?`)) { const n = selected.size; await window.gogigi.profiles.removeMany([...selected]); selected.clear(); await loadProfiles(); toast('ลบแล้ว', `${n} โปรไฟล์`); }
   });
   $('modalClose').addEventListener('click', closeModal);
   $('modalCancel').addEventListener('click', closeModal);
@@ -285,11 +331,16 @@ function initProfilesUI() {
       if (r.lat != null) { $('f_geolat').value = r.lat; $('f_geolon').value = r.lon; }
     }
   });
+  // Editing proxy invalidates the cached IP result.
+  ['f_phost', 'f_pport', 'f_pscheme', 'f_puser', 'f_ppass'].forEach((id) => {
+    const el = $(id);
+    if (el) ['input', 'change'].forEach((ev) => el.addEventListener(ev, () => { lastProxyInfo = null; $('f_proxyResult').textContent = ''; }));
+  });
   $('gmodalClose').addEventListener('click', () => $('gmodal').style.display = 'none');
   $('gmodalDone').addEventListener('click', () => $('gmodal').style.display = 'none');
   $('g_add').addEventListener('click', async () => {
     const r = await window.gogigi.groups.create($('g_newname').value);
-    if (!r.ok && r.reason === 'duplicate') { alert('มีกลุ่มชื่อนี้แล้ว'); return; }
+    if (!r.ok) { toast('เพิ่มกลุ่มไม่ได้', r.reason === 'duplicate' ? 'มีกลุ่มชื่อนี้แล้ว' : r.reason, 'err'); return; }
     $('g_newname').value = ''; await loadGroups(); renderGroupsModal();
   });
   window.gogigi.profiles.onChange(() => loadProfiles());
@@ -315,7 +366,9 @@ async function loadExtensions() {
 function initExtensionsUI() {
   $('btnAddExt').addEventListener('click', async () => {
     const r = await window.gogigi.extensions.add();
-    if (!r.ok && r.reason !== 'canceled') alert('เพิ่มไม่สำเร็จ: ' + r.reason);
+    if (!r.ok && r.reason !== 'canceled') toast('เพิ่ม extension ไม่ได้', r.reason, 'err');
+    else if (r.ok) toast('เพิ่ม extension แล้ว', r.extension.name, 'ok');
+    allExtensions = await window.gogigi.extensions.list();
     await loadExtensions();
   });
 }
@@ -351,6 +404,12 @@ async function initSettings() {
   window.gogigi.theme.onChange((d) => applyThemeAttr(d));
   $('btnOpenData').addEventListener('click', () => window.gogigi.system.openPath('userData'));
   $('btnOpenLogs').addEventListener('click', () => window.gogigi.system.openPath('logs'));
+  $('themeToggle').addEventListener('click', async () => {
+    const cur = await window.gogigi.theme.get();
+    const isDark = cur.source === 'dark' || (cur.source === 'system' && cur.dark);
+    const next = isDark ? 'light' : 'dark';
+    markTheme(next); await window.gogigi.theme.set(next); applyThemeAttr(await window.gogigi.theme.get());
+  });
 }
 
 // ======================= BUNDLED CHROMIUM =================================
@@ -408,6 +467,7 @@ function initUpdates() {
 async function init() {
   try { const v = await window.gogigi.getVersion(); $('version').textContent = v; $('curVer').textContent = v; } catch { $('version').textContent = '?'; }
   initProfilesUI(); initExtensionsUI(); await initSettings(); initChromium(); initUpdates();
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeModal(); $('gmodal').style.display = 'none'; } });
   await loadGroups();
   allExtensions = await window.gogigi.extensions.list();
   await loadProfiles();

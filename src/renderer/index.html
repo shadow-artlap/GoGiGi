@@ -3,142 +3,133 @@
 <head>
   <meta charset="utf-8" />
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'none'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self';" />
+        content="default-src 'none'; img-src 'self' data:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self';" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>GoGiGi</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <header>
-    <img class="logo" src="assets/logo.png" alt="GoGiGi" />
-    <div class="brand">Go<span>GiGi</span></div>
-    <div class="ver">v<span id="version">…</span></div>
-  </header>
-
-  <nav class="tabs">
-    <button data-tab="profiles" class="active">Profiles</button>
-    <button data-tab="extensions">Extensions</button>
-    <button data-tab="dashboard">Dashboard</button>
-    <button data-tab="settings">Settings</button>
-    <button data-tab="updates">Updates</button>
-  </nav>
-
-  <main>
-    <!-- Profiles -->
-    <section class="view active" id="view-profiles">
-      <div class="toolbar">
-        <button class="btn primary" id="btnNewProfile">+ โปรไฟล์ใหม่</button>
-        <select id="groupFilter" class="sel"></select>
-        <button class="btn" id="btnManageGroups">จัดการกลุ่ม</button>
-        <input type="text" id="searchProfiles" placeholder="ค้นหาชื่อ / กลุ่ม / แท็ก…" />
-        <span class="grow"></span>
-        <span class="muted" id="profileCount"></span>
+  <div class="app">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="side-logo">
+        <img src="assets/logo.png" alt="GoGiGi" />
+        <div class="brand">Go<b>GiGi</b></div>
       </div>
+      <nav class="side-nav">
+        <button data-tab="profiles" class="active"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="6" rx="1.5"/><rect x="3" y="14" width="18" height="6" rx="1.5"/></svg><span>โปรไฟล์</span></button>
+        <button data-tab="extensions"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 4h-4v3a2 2 0 1 1-4 0V4H4v16h16v-4h-3a2 2 0 1 1 0-4h3V4h-6z"/></svg><span>Extensions</span></button>
+        <button data-tab="dashboard"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="8" height="8" rx="1.5"/><rect x="13" y="3" width="8" height="5" rx="1.5"/><rect x="13" y="11" width="8" height="10" rx="1.5"/><rect x="3" y="14" width="8" height="7" rx="1.5"/></svg><span>ภาพรวม</span></button>
+        <button data-tab="settings"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.6-2-3.4-2.4 1a7 7 0 0 0-1.7-1L16.5 2h-4l-.3 2.6a7 7 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.6a7 7 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 1.7 1l.3 2.4h4l.3-2.6a7 7 0 0 0 1.7-1l2.4 1 2-3.4-2-1.6c.07-.33.1-.66.1-1z"/></svg><span>ตั้งค่า</span></button>
+        <button data-tab="updates"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 4v10m0 0l-4-4m4 4l4-4"/><path d="M5 18h14"/></svg><span>อัปเดต</span></button>
+      </nav>
+      <div class="side-foot">
+        <span class="live-pill" id="livePill"><span class="dot"></span><span id="liveCount">ไม่มีโปรไฟล์ที่เปิดอยู่</span></span>
+        <span class="ver">v<span id="version">…</span></span>
+      </div>
+    </aside>
 
-      <div class="bulkbar" id="bulkbar" style="display:none;">
-        <span id="bulkCount" class="muted"></span>
-        <select id="bulkGroup" class="sel"></select>
-        <button class="btn sm" id="bulkMove">ย้ายกลุ่ม</button>
-        <button class="btn sm danger" id="bulkDelete">ลบที่เลือก</button>
+    <!-- Main -->
+    <div class="main">
+      <div class="topbar">
+        <div class="ttl" id="pageTitle">โปรไฟล์</div>
+        <div class="spacer"></div>
+        <button class="btn ghost" id="themeToggle" title="สลับธีม"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12.8A8.5 8.5 0 1 1 11.2 3 6.6 6.6 0 0 0 21 12.8z"/></svg></button>
       </div>
 
-      <div class="tablewrap">
-        <table class="ptable">
-          <thead>
-            <tr>
-              <th style="width:34px;"><input type="checkbox" id="checkAll" /></th>
-              <th>ชื่อ / แพลตฟอร์ม</th>
-              <th>กลุ่ม</th>
-              <th>Proxy / IP</th>
-              <th>Fingerprint</th>
-              <th>แท็ก</th>
-              <th>สร้างเมื่อ</th>
-              <th style="width:150px;"></th>
-            </tr>
-          </thead>
-          <tbody id="profileRows"></tbody>
-        </table>
-      </div>
-      <div id="profileEmpty" class="empty" style="display:none;">
-        ยังไม่มีโปรไฟล์ — กด <b>+ โปรไฟล์ใหม่</b> เพื่อเริ่ม
-      </div>
-    </section>
-
-    <!-- Extensions -->
-    <section class="view" id="view-extensions">
-      <div class="toolbar">
-        <button class="btn primary" id="btnAddExt">+ เพิ่ม extension</button>
-        <span class="muted">เลือกโฟลเดอร์ extension ที่แตกไฟล์แล้ว (มี manifest.json)</span>
-      </div>
-      <div id="extList"></div>
-      <div id="extEmpty" class="empty" style="display:none;">ยังไม่มี extension</div>
-    </section>
-
-    <!-- Dashboard -->
-    <section class="view" id="view-dashboard">
-      <div class="toolbar">
-        <button class="btn" id="btnRefresh">รีเฟรช</button>
-        <span class="muted" id="refreshedAt"></span>
-      </div>
-      <h2 class="section">ข้อมูลระบบ</h2>
-      <div class="grid" id="sysGrid"></div>
-      <h2 class="section" style="margin-top:22px;">หน่วยความจำ</h2>
-      <div class="card"><div class="k">RAM ที่ใช้ <span id="memText"></span></div><div class="bar"><i id="memBar"></i></div></div>
-    </section>
-
-    <!-- Settings -->
-    <section class="view" id="view-settings">
-      <h2 class="section">การตั้งค่า</h2>
-      <div class="row">
-        <div><div class="label">ธีม</div><div class="desc">จำค่าหลังปิดโปรแกรม</div></div>
-        <div class="grow"></div>
-        <div class="seg" id="themeSeg">
-          <button data-theme-mode="system">ตามระบบ</button>
-          <button data-theme-mode="light">สว่าง</button>
-          <button data-theme-mode="dark">มืด</button>
-        </div>
-      </div>
-      <div class="row">
-        <div><div class="label">ชื่อที่แสดง</div><div class="desc">บันทึกอัตโนมัติ</div></div>
-        <div class="grow"></div>
-        <input type="text" id="displayName" placeholder="เช่น Shadow" />
-      </div>
-      <div class="row">
-        <div style="min-width:0;flex:1;">
-          <div class="label">GoGiGi Chromium (bundled)</div>
-          <div class="desc" id="chromiumDesc">กำลังตรวจสอบ…</div>
-          <div class="bar" id="chrBar" style="display:none;margin-top:8px;max-width:340px;"><i id="chrBarFill"></i></div>
-        </div>
-        <div class="grow"></div>
-        <button class="btn" id="btnChromium" disabled>…</button>
-      </div>
-      <div class="row">
-        <div><div class="label">ไฟล์ของแอป</div><div class="desc">เปิดโฟลเดอร์ข้อมูล/log</div></div>
-        <div class="grow"></div>
-        <button class="btn" id="btnOpenData">โฟลเดอร์ข้อมูล</button>
-        <button class="btn" id="btnOpenLogs">โฟลเดอร์ Log</button>
-      </div>
-    </section>
-
-    <!-- Updates -->
-    <section class="view" id="view-updates">
-      <h2 class="section">อัปเดต</h2>
-      <div class="update-box">
-        <div class="card">
-          <div class="k">เวอร์ชันปัจจุบัน</div>
-          <div class="v">v<span id="curVer">…</span></div>
-          <div class="status" id="status">พร้อมใช้งาน</div>
-          <div class="bar" id="upBar" style="display:none;"><i id="upBarFill"></i></div>
-          <div class="update-actions" style="margin-top:14px;">
-            <button class="btn primary" id="btnCheck">ตรวจหาอัปเดต</button>
-            <button class="btn primary" id="btnUpdateNow" style="display:none;">อัปเดตเลย</button>
-            <button class="btn" id="btnRetry" style="display:none;">ลองใหม่</button>
+      <div class="content">
+        <!-- Profiles -->
+        <section class="view active" id="view-profiles">
+          <div class="toolbar">
+            <button class="btn primary" id="btnNewProfile"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>โปรไฟล์ใหม่</button>
+            <div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg><input type="text" id="searchProfiles" placeholder="ค้นหาชื่อ กลุ่ม หรือแท็ก" /></div>
+            <select id="groupFilter" class="sel"></select>
+            <button class="btn ghost" id="btnManageGroups">จัดการกลุ่ม</button>
+            <div class="spacer"></div>
+            <button class="btn ghost" id="btnCloseAll" style="display:none;">ปิดทั้งหมด</button>
+            <span class="count" id="profileCount"></span>
           </div>
-        </div>
-        <p class="muted" style="margin-top:14px;">อัปเดตผ่าน GitHub Releases · <a href="#" id="repoLink">เปิดหน้า releases</a></p>
+
+          <div class="bulkbar" id="bulkbar" style="display:none;">
+            <span class="count" id="bulkCount"></span>
+            <div class="spacer"></div>
+            <select id="bulkGroup" class="sel"></select>
+            <button class="btn sm" id="bulkMove">ย้ายกลุ่ม</button>
+            <button class="btn sm danger" id="bulkDelete">ลบที่เลือก</button>
+          </div>
+
+          <div class="tablewrap" id="tablewrap">
+            <table class="ptable">
+              <thead><tr>
+                <th style="width:36px;"><input type="checkbox" id="checkAll" /></th>
+                <th>โปรไฟล์</th><th>กลุ่ม</th><th>Proxy / IP</th><th>Fingerprint</th><th>แท็ก</th><th>สร้างเมื่อ</th><th></th>
+              </tr></thead>
+              <tbody id="profileRows"></tbody>
+            </table>
+          </div>
+          <div id="profileEmpty" class="empty" style="display:none;">
+            <div class="big">ยังไม่มีโปรไฟล์</div>
+            <p>สร้างตัวตนเบราว์เซอร์แรก พร้อม proxy และ fingerprint ของมันเอง</p>
+            <button class="btn primary" id="btnNewProfile2">สร้างโปรไฟล์แรก</button>
+          </div>
+        </section>
+
+        <!-- Extensions -->
+        <section class="view" id="view-extensions">
+          <div class="toolbar">
+            <button class="btn primary" id="btnAddExt"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>เพิ่ม extension</button>
+            <span class="muted">เลือกโฟลเดอร์ extension ที่แตกไฟล์แล้ว (มี manifest.json)</span>
+          </div>
+          <div id="extList"></div>
+          <div id="extEmpty" class="empty" style="display:none;"><div class="big">ยังไม่มี extension</div><p>เพิ่มส่วนขยายที่จะติดตั้งให้โปรไฟล์ที่เลือก</p></div>
+        </section>
+
+        <!-- Dashboard -->
+        <section class="view" id="view-dashboard">
+          <div class="toolbar"><button class="btn ghost" id="btnRefresh">รีเฟรช</button><span class="muted" id="refreshedAt"></span></div>
+          <h2 class="section">ข้อมูลระบบ</h2>
+          <div class="grid" id="sysGrid"></div>
+          <h2 class="section" style="margin-top:24px;">หน่วยความจำ</h2>
+          <div class="card"><div class="k">RAM ที่ใช้ <span id="memText" class="mono"></span></div><div class="bar"><i id="memBar"></i></div></div>
+        </section>
+
+        <!-- Settings -->
+        <section class="view" id="view-settings">
+          <h2 class="section">ลักษณะ</h2>
+          <div class="row">
+            <div><div class="label">ธีม</div><div class="desc">จำค่าหลังปิดโปรแกรม</div></div><div class="grow"></div>
+            <div class="seg" id="themeSeg"><button data-theme-mode="system">ตามระบบ</button><button data-theme-mode="light">สว่าง</button><button data-theme-mode="dark">มืด</button></div>
+          </div>
+          <div class="row"><div><div class="label">ชื่อที่แสดง</div><div class="desc">บันทึกอัตโนมัติ</div></div><div class="grow"></div><input type="text" id="displayName" placeholder="เช่น Shadow" style="max-width:220px;" /></div>
+          <h2 class="section" style="margin-top:24px;">เบราว์เซอร์</h2>
+          <div class="row">
+            <div style="min-width:0;flex:1;"><div class="label">GoGiGi Chromium</div><div class="desc" id="chromiumDesc">กำลังตรวจสอบ…</div><div class="bar" id="chrBar" style="display:none;margin-top:9px;max-width:340px;"><i id="chrBarFill"></i></div></div>
+            <div class="grow"></div><button class="btn" id="btnChromium" disabled>…</button>
+          </div>
+          <h2 class="section" style="margin-top:24px;">ไฟล์</h2>
+          <div class="row"><div><div class="label">โฟลเดอร์ของแอป</div><div class="desc">ข้อมูลโปรไฟล์และบันทึกการทำงาน</div></div><div class="grow"></div><button class="btn" id="btnOpenData">ข้อมูล</button><button class="btn" id="btnOpenLogs">Log</button></div>
+        </section>
+
+        <!-- Updates -->
+        <section class="view" id="view-updates">
+          <h2 class="section">อัปเดต</h2>
+          <div class="update-box">
+            <div class="card">
+              <div class="k">เวอร์ชันปัจจุบัน</div><div class="v mono">v<span id="curVer">…</span></div>
+              <div class="status" id="status">พร้อมใช้งาน</div>
+              <div class="bar" id="upBar" style="display:none;"><i id="upBarFill"></i></div>
+              <div class="update-actions" style="margin-top:14px;">
+                <button class="btn primary" id="btnCheck">ตรวจหาอัปเดต</button>
+                <button class="btn primary" id="btnUpdateNow" style="display:none;">อัปเดตเลย</button>
+                <button class="btn" id="btnRetry" style="display:none;">ลองใหม่</button>
+              </div>
+            </div>
+            <p class="muted" style="margin-top:14px;">อัปเดตผ่าน GitHub Releases · <a href="#" id="repoLink">เปิดหน้า releases</a></p>
+          </div>
+        </section>
       </div>
-    </section>
-  </main>
+    </div>
+  </div>
 
   <!-- Profile modal -->
   <div class="modal-backdrop" id="modal" style="display:none;">
@@ -146,103 +137,53 @@
       <div class="modal-head"><h3 id="modalTitle">โปรไฟล์ใหม่</h3><button class="icon-btn" id="modalClose">✕</button></div>
       <div class="modal-body">
         <input type="hidden" id="f_id" />
-
-        <div class="fsec">ข้อมูลพื้นฐาน</div>
+        <div class="fsec">ทั่วไป</div>
         <div class="field"><label>ชื่อโปรไฟล์</label><input type="text" id="f_name" placeholder="เช่น Shop-01" /></div>
-        <div class="field-row">
-          <div class="field"><label>กลุ่ม</label><select id="f_group"></select></div>
-          <div class="field"><label>เบราว์เซอร์</label><select id="f_browser"></select></div>
-        </div>
+        <div class="field-row"><div class="field"><label>กลุ่ม</label><select id="f_group" class="fin"></select></div><div class="field"><label>เบราว์เซอร์</label><select id="f_browser" class="fin"></select></div></div>
 
-        <div class="fsec">Platform (บัญชีแพลตฟอร์ม)</div>
+        <div class="fsec">บัญชีแพลตฟอร์ม</div>
         <div class="field-row">
-          <div class="field"><label>แพลตฟอร์ม</label>
-            <input type="text" id="f_pfname" list="platformList" placeholder="Facebook / Google / Outlook…" />
-            <datalist id="platformList">
-              <option value="Facebook"></option><option value="Google"></option><option value="Outlook"></option>
-              <option value="TikTok"></option><option value="Amazon"></option><option value="Instagram"></option>
-            </datalist>
-          </div>
+          <div class="field"><label>แพลตฟอร์ม</label><input type="text" id="f_pfname" list="platformList" placeholder="Facebook, Google, Outlook…" /><datalist id="platformList"><option value="Facebook"></option><option value="Google"></option><option value="Outlook"></option><option value="TikTok"></option><option value="Amazon"></option><option value="Instagram"></option></datalist></div>
           <div class="field"><label>บัญชี / อีเมล</label><input type="text" id="f_pfacct" placeholder="user@example.com" /></div>
         </div>
-        <div class="field-row">
-          <div class="field"><label>รหัสผ่าน</label><input type="text" id="f_pfpass" /></div>
-          <div class="field"><label>2FA / หมายเหตุ</label><input type="text" id="f_pf2fa" /></div>
-        </div>
+        <div class="field-row"><div class="field"><label>รหัสผ่าน</label><input type="text" id="f_pfpass" /></div><div class="field"><label>2FA / หมายเหตุ</label><input type="text" id="f_pf2fa" /></div></div>
 
-        <div class="fsec">Tabs (เปิดตอนเริ่ม — URL ต่อบรรทัด)</div>
+        <div class="fsec">แท็บเริ่มต้น <span class="muted">(URL ต่อบรรทัด)</span></div>
         <div class="field"><textarea id="f_tabs" rows="3" placeholder="https://www.google.com&#10;https://www.facebook.com"></textarea></div>
 
         <div class="fsec">Proxy</div>
         <div class="field-row">
-          <div class="field" style="max-width:120px;"><label>ชนิด</label>
-            <select id="f_pscheme"><option>http</option><option>https</option><option value="socks5">socks5</option><option value="socks4">socks4</option></select>
-          </div>
+          <div class="field" style="max-width:120px;"><label>ชนิด</label><select id="f_pscheme" class="fin"><option>http</option><option>https</option><option value="socks5">socks5</option><option value="socks4">socks4</option></select></div>
           <div class="field"><label>Host</label><input type="text" id="f_phost" placeholder="1.2.3.4" /></div>
           <div class="field" style="max-width:100px;"><label>Port</label><input type="text" id="f_pport" placeholder="8080" /></div>
         </div>
-        <div class="field-row">
-          <div class="field"><label>Proxy user</label><input type="text" id="f_puser" /></div>
-          <div class="field"><label>Proxy password</label><input type="text" id="f_ppass" /></div>
-        </div>
-        <div class="field-row" style="align-items:center;">
-          <button class="btn sm" id="f_proxyTest" type="button">🔍 ทดสอบ proxy</button>
-          <span id="f_proxyResult" class="small muted"></span>
-        </div>
-        <label class="chk"><input type="checkbox" id="f_autofp" checked /> ซิงค์ fingerprint (timezone/locale/geo) ให้ตรงกับ proxy อัตโนมัติ</label>
+        <div class="field-row"><div class="field"><label>ชื่อผู้ใช้</label><input type="text" id="f_puser" /></div><div class="field"><label>รหัสผ่าน</label><input type="text" id="f_ppass" /></div></div>
+        <div class="field-row" style="align-items:center;"><button class="btn sm" id="f_proxyTest" type="button">ทดสอบ proxy</button><span id="f_proxyResult" class="small muted"></span></div>
+        <label class="chk"><input type="checkbox" id="f_autofp" checked /> ซิงค์ fingerprint (timezone / locale / พิกัด) ให้ตรงกับ proxy</label>
 
         <div class="fsec">Fingerprint</div>
-        <div class="field">
-          <label>WebRTC</label>
-          <div class="seg" id="f_webrtc">
-            <button type="button" data-webrtc="real">Real</button>
-            <button type="button" data-webrtc="proxy-udp">Proxy UDP</button>
-            <button type="button" data-webrtc="disabled">Disabled</button>
-          </div>
-        </div>
-        <div class="field"><label>User-Agent (เว้นว่าง = ค่าเริ่มต้น)</label><input type="text" id="f_ua" placeholder="Mozilla/5.0 …" /></div>
+        <div class="field"><label>WebRTC</label><div class="seg" id="f_webrtc"><button type="button" data-webrtc="real">จริง</button><button type="button" data-webrtc="proxy-udp">ตาม proxy</button><button type="button" data-webrtc="disabled">ปิด</button></div></div>
+        <div class="field"><label>User-Agent <span class="muted">(เว้นว่าง = ค่าเริ่มต้นของเบราว์เซอร์)</span></label><input type="text" id="f_ua" placeholder="Mozilla/5.0 …" /></div>
         <div class="field-row">
-          <div class="field"><label>Platform (navigator.platform)</label>
-            <input type="text" id="f_uaplat" list="uaplatList" placeholder="Win32 / MacIntel / Linux x86_64" />
-            <datalist id="uaplatList"><option value="Win32"></option><option value="MacIntel"></option><option value="Linux x86_64"></option></datalist>
-          </div>
-          <div class="field"><label>Timezone</label>
-            <input type="text" id="f_tz" list="tzList" placeholder="Asia/Bangkok" />
-            <datalist id="tzList"><option value="Asia/Bangkok"></option><option value="Asia/Vientiane"></option><option value="America/New_York"></option><option value="Europe/London"></option><option value="UTC"></option></datalist>
-          </div>
+          <div class="field"><label>Platform</label><input type="text" id="f_uaplat" list="uaplatList" placeholder="Win32 / MacIntel / Linux x86_64" /><datalist id="uaplatList"><option value="Win32"></option><option value="MacIntel"></option><option value="Linux x86_64"></option></datalist></div>
+          <div class="field"><label>Timezone</label><input type="text" id="f_tz" list="tzList" placeholder="Asia/Bangkok" /><datalist id="tzList"><option value="Asia/Bangkok"></option><option value="Asia/Vientiane"></option><option value="America/New_York"></option><option value="Europe/London"></option><option value="UTC"></option></datalist></div>
         </div>
         <div class="field-row">
-          <div class="field"><label>Locale</label><input type="text" id="f_locale" list="localeList" placeholder="th-TH" />
-            <datalist id="localeList"><option value="th-TH"></option><option value="en-US"></option><option value="lo-LA"></option></datalist>
-          </div>
-          <div class="field"><label>หน้าจอ (กว้างxสูง)</label>
-            <div style="display:flex;gap:8px;"><input type="text" id="f_scrw" placeholder="1920" /><input type="text" id="f_scrh" placeholder="1080" /></div>
-          </div>
+          <div class="field"><label>Locale</label><input type="text" id="f_locale" list="localeList" placeholder="th-TH" /><datalist id="localeList"><option value="th-TH"></option><option value="en-US"></option><option value="lo-LA"></option></datalist></div>
+          <div class="field"><label>ขนาดหน้าจอ</label><div style="display:flex;gap:8px;"><input type="text" id="f_scrw" placeholder="กว้าง 1920" /><input type="text" id="f_scrh" placeholder="สูง 1080" /></div></div>
         </div>
-        <div class="field-row">
-          <div class="field"><label>พิกัด lat</label><input type="text" id="f_geolat" placeholder="13.7563" /></div>
-          <div class="field"><label>พิกัด lon</label><input type="text" id="f_geolon" placeholder="100.5018" /></div>
-        </div>
-        <div class="field-row">
-          <div class="field"><label>CPU cores (hardwareConcurrency)</label><input type="text" id="f_hc" placeholder="8" /></div>
-          <div class="field"><label>RAM (deviceMemory, GB)</label><input type="text" id="f_dm" placeholder="8" /></div>
-        </div>
-        <div class="field-row">
-          <div class="field"><label>WebGL vendor</label><input type="text" id="f_glv" placeholder="Google Inc. (NVIDIA)" /></div>
-          <div class="field"><label>WebGL renderer</label><input type="text" id="f_glr" placeholder="ANGLE (NVIDIA ...)" /></div>
-        </div>
-        <label class="chk"><input type="checkbox" id="f_canvas" checked /> เพิ่ม noise ให้ Canvas/WebGL (กันลายนิ้วมือ)</label>
+        <div class="field-row"><div class="field"><label>พิกัด lat</label><input type="text" id="f_geolat" placeholder="13.7563" /></div><div class="field"><label>พิกัด lon</label><input type="text" id="f_geolon" placeholder="100.5018" /></div></div>
+        <div class="field-row"><div class="field"><label>CPU cores</label><input type="text" id="f_hc" placeholder="8" /></div><div class="field"><label>RAM (GB)</label><input type="text" id="f_dm" placeholder="8" /></div></div>
+        <div class="field-row"><div class="field"><label>WebGL vendor</label><input type="text" id="f_glv" placeholder="Google Inc. (NVIDIA)" /></div><div class="field"><label>WebGL renderer</label><input type="text" id="f_glr" placeholder="ANGLE (NVIDIA…)" /></div></div>
+        <label class="chk"><input type="checkbox" id="f_canvas" checked /> เพิ่ม noise ให้ Canvas / WebGL</label>
 
         <div class="fsec">Extensions</div>
         <div id="f_extList" class="extpick"></div>
 
         <div class="fsec">อื่นๆ</div>
-        <div class="field-row">
-          <div class="field"><label>แท็ก (คั่นด้วย , )</label><input type="text" id="f_tags" placeholder="ads, ร้านA" /></div>
-          <div class="field"><label>Remark</label><input type="text" id="f_remark" /></div>
-        </div>
+        <div class="field-row"><div class="field"><label>แท็ก <span class="muted">(คั่นด้วย ,)</span></label><input type="text" id="f_tags" placeholder="ads, ร้านA" /></div><div class="field"><label>บันทึกย่อ</label><input type="text" id="f_remark" /></div></div>
       </div>
-      <div class="modal-foot"><button class="btn" id="modalCancel">ยกเลิก</button><button class="btn primary" id="modalSave">บันทึก</button></div>
+      <div class="modal-foot"><button class="btn ghost" id="modalCancel">ยกเลิก</button><button class="btn primary" id="modalSave">บันทึก</button></div>
     </div>
   </div>
 
@@ -251,16 +192,14 @@
     <div class="modal">
       <div class="modal-head"><h3>จัดการกลุ่ม</h3><button class="icon-btn" id="gmodalClose">✕</button></div>
       <div class="modal-body">
-        <div class="field-row">
-          <div class="field"><input type="text" id="g_newname" placeholder="ชื่อกลุ่มใหม่" /></div>
-          <button class="btn primary" id="g_add" style="align-self:flex-end;">เพิ่ม</button>
-        </div>
-        <div id="g_list"></div>
+        <div class="grow-row"><input type="text" id="g_newname" placeholder="ชื่อกลุ่มใหม่" /><button class="btn primary" id="g_add">เพิ่ม</button></div>
+        <div id="g_list" style="margin-top:10px;"></div>
       </div>
-      <div class="modal-foot"><button class="btn" id="gmodalDone">เสร็จ</button></div>
+      <div class="modal-foot"><button class="btn primary" id="gmodalDone">เสร็จ</button></div>
     </div>
   </div>
 
+  <div id="toasts"></div>
   <script src="renderer.js"></script>
 </body>
 </html>
