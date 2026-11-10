@@ -36,7 +36,20 @@ async function status() {
 
 // Ensure a Chromium is present; downloads the latest stable if missing.
 // progress: (downloadedBytes, totalBytes) => void
-async function ensure(progress) {
+// Concurrent callers (Settings button + a bundled profile launch) share one
+// download instead of racing two installs into the same folder.
+let inflight = null;
+const listeners = new Set();
+function ensure(progress) {
+  if (progress) listeners.add(progress);
+  if (!inflight) {
+    inflight = ensureOnce((dl, total) => { for (const l of listeners) { try { l(dl, total); } catch (e) {} } })
+      .finally(() => { inflight = null; listeners.clear(); });
+  }
+  return inflight;
+}
+
+async function ensureOnce(progress) {
   const existing = await installedChromes();
   if (existing.length) {
     const b = existing[existing.length - 1];

@@ -143,86 +143,153 @@ function buildInjection(fp, seed) {
   })();`;
 }
 
-async function launch(opts) {
-  const { id, exePath, userDataDir, extraArgs = [], proxy, fp = {}, tabs = [], meta = {} } = opts;
-  if (running.has(id)) return { ok: false, reason: 'already-running' };
+const ProxyChain = require('proxy-chain');
+const launchingIds = new Set();
 
-  const args = [
-    '--no-first-run', '--no-default-browser-check',
-    '--disable-blink-features=AutomationControlled',
-    ...extraArgs,
+function upstreamUrl(p) {
+  const auth = p.username ? `${encodeURIComponent(p.username)}:${encodeURIComponent(p.password || '')}@` : '';
+  return `${p.scheme || 'http'}://${auth}${p.host}:${p.port}`;
+}
+
+// UA + Client Hints derived from the REAL engine version, so navigator.userAgent,
+// navigator.userAgentData and Sec-CH-UA headers never contradict each other.
+function uaFor(major) {
+  return `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`;
+}
+function uaMetadataFor(major, full) {
+  const brands = [
+    { brand: 'Chromium', version: String(major) },
+    { brand: 'Google Chrome', version: String(major) },
+    { brand: 'Not_A Brand', version: '24' },
   ];
-  if (proxy && proxy.host && proxy.port) {
-    args.push(`--proxy-server=${proxy.scheme || 'http'}://${proxy.host}:${proxy.port}`);
-  }
-  if (fp.webrtc === 'disabled' || fp.webrtc === 'proxy-udp') {
-    args.push('--force-webrtc-ip-handling-policy=disable_non_proxied_udp');
-  }
-  if (fp.locale) args.push(`--lang=${fp.locale}`);
-  if (fp.screen && fp.screen.width) args.push(`--window-size=${fp.screen.width},${fp.screen.height}`);
-
-  let browser;
-  try {
-    browser = await puppeteer.launch({
-      executablePath: exePath,
-      userDataDir,
-      headless: false,
-      defaultViewport: null,
-      ignoreDefaultArgs: ['--enable-automation'],
-      args,
-    });
-  } catch (e) {
-    return { ok: false, reason: String((e && e.message) || e) };
-  }
-  running.set(id, { browser });
-
-  const seed = seedFromId(id);
-  const injection = buildInjection(fp, seed);
-
-  const applyPage = async (page) => {
-    try {
-      if (fp.userAgent) {
-        await page.setUserAgent(fp.userAgent, fp.uaMetadata || undefined);
-      }
-      if (fp.timezone) { try { await page.emulateTimezone(fp.timezone); } catch (e) {} }
-      if (fp.geo && fp.geo.lat != null && fp.geo.lon != null) {
-        try { await page.setGeolocation({ latitude: Number(fp.geo.lat), longitude: Number(fp.geo.lon), accuracy: 50 }); } catch (e) {}
-      }
-      if (proxy && proxy.username) {
-        try { await page.authenticate({ username: proxy.username, password: proxy.password }); } catch (e) {}
-      }
-      await page.evaluateOnNewDocument(injection);
-    } catch (e) { /* ignore */ }
+  return {
+    brands,
+    fullVersionList: brands.map((b) => ({ brand: b.brand, version: b.brand === 'Not_A Brand' ? '24.0.0.0' : full })),
+    fullVersion: full,
+    platform: 'Windows', platformVersion: '15.0.0', architecture: 'x86',
+    model: '', mobile: false, bitness: '64', wow64: false,
   };
+}
 
-  browser.on('targetcreated', async (t) => {
-    try { const p = await t.page(); if (p) await applyPage(p); } catch (e) { /* ignore */ }
-  });
-  try { for (const p of await browser.pages()) await applyPage(p); } catch (e) {}
-
-  // Grant geolocation permission at context level
-  if (fp.geo && fp.geo.lat != null) {
-    try {
-      const ctx = browser.defaultBrowserContext();
-      await ctx.overridePermissions((tabs && tabs[0]) || 'https://www.google.com', ['geolocation']);
-    } catch (e) {}
-  }
-
-  // First tab: GoGiGi start page (local) — exit IP/geo, account, 2FA, fingerprint.
+async function launch(opts) {
+  const { id, exePath, userDataDir, extraArgs = [], proxy, fp = {}, tabs = [], meta = {}, headless = false } = opts;
+  if (running.has(id) || launchingIds.has(id)) return { ok: false, reason: 'already-running' };
+  launchingIds.add(id);
+  let localProxy = null;
   try {
+    const args = [
+      '--no-first-run', '--no-default-browser-check',
+      '--disable-blink-features=AutomationControlled',
+      ...extraArgs,
+    ];
+    if (proxy && proxy.host && proxy.port) {
+      // Chrome can't authenticate SOCKS proxies, and per-page HTTP auth races on
+      // new tabs (first request can 407). A local no-auth forwarder fixes both.
+      const needsChain = !!proxy.username || String(proxy.scheme || '').startsWith('socks');
+      if (needsChain) {
+        localProxy = await ProxyChain.anonymizeProxy({ url: upstreamUrl(proxy), port: 0 });
+        args.push(`--proxy-server=${localProxy}`);
+      } else {
+        args.push(`--proxy-server=${proxy.scheme || 'http'}://${proxy.host}:${proxy.port}`);
+      }
+    }
+    if (fp.webrtc === 'disabled' || fp.webrtc === 'proxy-udp') {
+      args.push('--force-webrtc-ip-handling-policy=disable_non_proxied_udp');
+    }
+    if (fp.locale) args.push(`--lang=${fp.locale}`);
+    if (fp.screen && fp.screen.width) args.push(`--window-size=${fp.screen.width},${fp.screen.height}`);
+
+    let browser;
+    try {
+      browser = await puppeteer.launch({
+        executablePath: exePath, userDataDir, headless, defaultViewport: null,
+        ignoreDefaultArgs: ['--enable-automation'], args,
+      });
+    } catch (e) {
+      if (localProxy) await ProxyChain.closeAnonymizedProxy(localProxy, true).catch(() => {});
+      localProxy = null;
+      const msg = String((e && e.message) || e);
+      if (/already running|in use|lock/i.test(msg)) return { ok: false, reason: 'โปรไฟล์นี้ถูกเปิดค้างอยู่ — ปิดหน้าต่างเบราว์เซอร์เดิมก่อน' };
+      return { ok: false, reason: msg };
+    }
+    running.set(id, { browser, localProxy });
+
+    // UA consistent with the real engine unless the user set their own.
+    let ua = fp.userAgent || '';
+    let uaMeta;
+    if (!ua) {
+      try {
+        const m = (await browser.version()).match(/(\d+)\.(\d+)\.(\d+)\.(\d+)/);
+        if (m) { ua = uaFor(m[1]); uaMeta = uaMetadataFor(m[1], m[0]); }
+      } catch (e) { /* keep engine default */ }
+    }
+    const fpEff = { ...fp, userAgent: ua };
+    const injection = buildInjection(fpEff, seedFromId(id));
+
+    // One shared promise per page, so callers racing on the same page all wait
+    // for the injection to be registered before navigating.
+    const applying = new WeakMap();
+    const doApply = async (page) => {
+      try {
+        if (ua) { try { await page.setUserAgent(ua, uaMeta); } catch (e) { try { await page.setUserAgent(ua); } catch (_) {} } }
+        if (fp.timezone) { try { await page.emulateTimezone(fp.timezone); } catch (e) {} }
+        if (fp.geo && fp.geo.lat != null && fp.geo.lon != null) {
+          try { await page.setGeolocation({ latitude: Number(fp.geo.lat), longitude: Number(fp.geo.lon), accuracy: 50 }); } catch (e) {}
+        }
+        await page.evaluateOnNewDocument(injection);
+      } catch (e) { /* ignore */ }
+    };
+    const applyPage = (page) => {
+      if (!applying.has(page)) applying.set(page, doApply(page));
+      return applying.get(page);
+    };
+    // Did this document miss the injection? (compares generated values)
+    const missed = async (page) => {
+      try {
+        return await page.evaluate((hc, sw) => (!!hc && navigator.hardwareConcurrency !== hc) || (!!sw && screen.width !== sw),
+          fp.hardwareConcurrency || 0, (fp.screen && fp.screen.width) || 0);
+      } catch (e) { return false; }
+    };
+
+    browser.on('targetcreated', async (t) => {
+      try {
+        const p = await t.page(); if (!p) return;
+        await applyPage(p);
+        // A tab/popup the user opened can start loading before our script is
+        // registered. If its current document missed the injection, reload once.
+        if (/^https?:/i.test(p.url()) && await missed(p)) await p.reload().catch(() => {});
+      } catch (e) { /* ignore */ }
+    });
+    for (const p of await browser.pages()) await applyPage(p);
+
+    if (fp.geo && fp.geo.lat != null) {
+      try { await browser.defaultBrowserContext().overridePermissions((tabs && tabs[0]) || 'https://www.google.com', ['geolocation']); } catch (e) {}
+    }
+
+    // First tab: GoGiGi start page; configured tabs open after it.
     const pages = await browser.pages();
     const first = pages[0] || await browser.newPage();
-    const html = startpage.buildHtml(meta, fp);
-    await first.setContent(html, { waitUntil: 'domcontentloaded' }).catch(() => {});
-    // Any configured start tabs open as additional tabs.
+    await applyPage(first);
+    await first.setContent(startpage.buildHtml(meta, fpEff), { waitUntil: 'domcontentloaded' }).catch(() => {});
     for (const u of (tabs || [])) {
       const pg = await browser.newPage();
+      await applyPage(pg); // register the injection BEFORE navigating
       pg.goto(u, { waitUntil: 'domcontentloaded', timeout: 0 }).catch(() => {});
     }
-  } catch (e) { /* ignore */ }
 
-  browser.on('disconnected', () => { running.delete(id); if (onChange) onChange(); });
-  return { ok: true };
+    browser.on('disconnected', () => {
+      const r = running.get(id);
+      running.delete(id);
+      if (r && r.localProxy) ProxyChain.closeAnonymizedProxy(r.localProxy, true).catch(() => {});
+      if (onChange) onChange();
+    });
+    return { ok: true };
+  } catch (e) {
+    if (localProxy && !running.has(id)) ProxyChain.closeAnonymizedProxy(localProxy, true).catch(() => {});
+    return { ok: false, reason: String((e && e.message) || e) };
+  } finally {
+    launchingIds.delete(id);
+  }
 }
 
 async function stop(id) {
@@ -230,9 +297,14 @@ async function stop(id) {
   if (!r) return { ok: false, reason: 'not-running' };
   try { await r.browser.close(); } catch (e) { /* ignore */ }
   running.delete(id);
+  if (r.localProxy) await ProxyChain.closeAnonymizedProxy(r.localProxy, true).catch(() => {});
   return { ok: true };
 }
-
+async function stopAll() { await Promise.all([...running.keys()].map((id) => stop(id))); }
+function anyRunning() { return running.size > 0; }
 function isRunning(id) { return running.has(id); }
 
-module.exports = { launch, stop, isRunning, setOnChange, buildInjection };
+function _browser(id) { const r = running.get(id); return r && r.browser; } // test hook
+function _localProxy(id) { const r = running.get(id); return r && r.localProxy; }
+
+module.exports = { launch, stop, stopAll, anyRunning, isRunning, setOnChange, buildInjection, _browser, _localProxy };

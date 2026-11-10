@@ -159,7 +159,11 @@ ipcMain.handle('profiles:launch', async (_e, id) => {
   return profiles.launch(id);
 });
 ipcMain.handle('profiles:stop', (_e, id) => profiles.stop(id));
-ipcMain.handle('profiles:openDir', (_e, id) => shell.openPath(profiles.openDir(id)));
+ipcMain.handle('profiles:openDir', (_e, id) => {
+  const dir = profiles.openDir(id);
+  try { fs.mkdirSync(dir, { recursive: true }); } catch (e) { /* ignore */ }
+  return shell.openPath(dir);
+});
 ipcMain.handle('profiles:removeMany', (_e, ids) => profiles.removeMany(ids));
 ipcMain.handle('profiles:setGroupMany', (_e, { ids, group }) => profiles.setGroupMany(ids, group));
 ipcMain.handle('browsers:list', () => profiles.browsers());
@@ -171,8 +175,8 @@ ipcMain.handle('proxy:testProfile', async (_e, id) => {
   if (!p) return { ok: false, reason: 'not-found' };
   const r = await proxytest.test(p.proxy);
   if (r.ok) profiles.setProxyInfo(id, {
-    ip: r.ip, country: r.country, countryCode: r.countryCode,
-    flag: r.flag, timezone: r.timezone, latency: r.latency, testedAt: r.testedAt,
+    ip: r.ip, country: r.country, countryCode: r.countryCode, flag: r.flag,
+    timezone: r.timezone, lat: r.lat, lon: r.lon, latency: r.latency, testedAt: r.testedAt,
   });
   return r;
 });
@@ -249,5 +253,16 @@ if (!gotLock) {
 
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
+  });
+
+  // Close profile browsers (and their local proxy forwarders) before exiting,
+  // so they don't linger as orphans that keep the profile folder locked.
+  let quitting = false;
+  app.on('before-quit', (e) => {
+    if (quitting || !profiles.anyRunning()) return;
+    e.preventDefault();
+    quitting = true;
+    const done = () => app.quit();
+    Promise.race([profiles.stopAll(), new Promise((r) => setTimeout(r, 5000))]).then(done, done);
   });
 }

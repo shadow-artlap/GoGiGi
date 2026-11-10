@@ -11,6 +11,7 @@ const crypto = require('crypto');
 const fingerprint = require('./fingerprint');
 const extensions = require('./extensions');
 const fpgen = require('./fpgen');
+const proxytest = require('./proxytest');
 
 let USERDATA = '';
 let PROFILES_DIR = '';
@@ -195,52 +196,76 @@ function browsers() {
 }
 
 // ---- launch / stop (via fingerprint engine) -------------------------------
-async function launch(id, exeOverride) {
-  if (fingerprint.isRunning(id)) return { ok: false, reason: 'already-running' };
-  const items = readIndex();
-  const profile = items.find((x) => x.id === id);
-  if (!profile) return { ok: false, reason: 'not-found' };
-  const exe = exeOverride || resolveBrowser(profile.browser);
-  if (!exe) return { ok: false, reason: `browser-not-found: ${profile.browser}` };
+async function launch(id, exeOverride, opts = {}) {
+  try {
+    if (fingerprint.isRunning(id)) return { ok: false, reason: 'already-running' };
+    const items = readIndex();
+    const profile = items.find((x) => x.id === id);
+    if (!profile) return { ok: false, reason: 'not-found' };
+    const exe = exeOverride || resolveBrowser(profile.browser);
+    if (!exe) return { ok: false, reason: `ไม่พบเบราว์เซอร์: ${profile.browser}` };
 
-  const dir = profileDir(id);
-  fs.mkdirSync(dir, { recursive: true });
+    const dir = profileDir(id);
+    fs.mkdirSync(dir, { recursive: true });
 
-  const extraArgs = [];
-  const extPaths = extensions.resolvePaths(profile.extensions || []);
-  if (extPaths.length) {
-    extraArgs.push(`--disable-extensions-except=${extPaths.join(',')}`);
-    extraArgs.push(`--load-extension=${extPaths.join(',')}`);
+    const extraArgs = [];
+    const extPaths = extensions.resolvePaths(profile.extensions || []);
+    if (extPaths.length) {
+      extraArgs.push(`--disable-extensions-except=${extPaths.join(',')}`);
+      extraArgs.push(`--load-extension=${extPaths.join(',')}`);
+      // Chrome 137+ ignores --load-extension unless this escape hatch is set.
+      extraArgs.push('--disable-features=DisableLoadExtensionCommandLineSwitch');
+    }
+
+    // Effective fingerprint: distinct per profile (even behind the same proxy).
+    const eff = fpgen.effective(id, profile.fingerprint || {});
+
+    // Keep the clock/language consistent with the proxy's exit country when the
+    // user hasn't set them — a system timezone that contradicts the IP is one of
+    // the strongest detection signals.
+    if (profile.proxy && profile.proxy.host && (!eff.timezone || !eff.locale || !eff.geo)) {
+      let info = profile.proxyInfo && profile.proxyInfo.timezone ? profile.proxyInfo : null;
+      if (!info || info.lat == null) {
+        const t = await proxytest.test(profile.proxy, 8000);
+        if (t.ok) {
+          info = t;
+          profile.proxyInfo = {
+            ip: t.ip, country: t.country, countryCode: t.countryCode, flag: t.flag,
+            timezone: t.timezone, lat: t.lat, lon: t.lon, latency: t.latency, testedAt: t.testedAt,
+          };
+        }
+      }
+      if (info) {
+        if (!eff.timezone && info.timezone) eff.timezone = info.timezone;
+        if (!eff.locale && info.countryCode) eff.locale = proxytest.localeForCountry(info.countryCode);
+        if (!eff.geo && info.lat != null && info.lon != null) eff.geo = { lat: info.lat, lon: info.lon };
+      }
+    }
+
+    const meta = {
+      name: profile.name, id, profileNo: profile.id, group: profile.group,
+      platform: profile.platform, remark: profile.remark, tags: profile.tags,
+      proxyType: profile.proxy ? `${profile.proxy.scheme}://${profile.proxy.host}:${profile.proxy.port}` : 'No Proxy',
+    };
+    const r = await fingerprint.launch({
+      id, exePath: exe, userDataDir: dir, extraArgs,
+      proxy: profile.proxy, fp: eff, meta, tabs: profile.tabs || [],
+      headless: !!opts.headless,
+    });
+    if (r.ok) profile.lastUsedAt = Date.now();
+    writeIndex(items); // persists lastUsedAt and any freshly detected proxyInfo
+    return r;
+  } catch (e) {
+    return { ok: false, reason: String((e && e.message) || e) };
   }
-
-  // Effective fingerprint: distinct per profile (even behind the same proxy).
-  const eff = fpgen.effective(id, profile.fingerprint || {});
-  const meta = {
-    name: profile.name, id, profileNo: profile.id, group: profile.group,
-    platform: profile.platform, remark: profile.remark, tags: profile.tags,
-    proxyType: profile.proxy ? `${profile.proxy.scheme}://${profile.proxy.host}:${profile.proxy.port}` : 'No Proxy',
-  };
-  const r = await fingerprint.launch({
-    id,
-    exePath: exe,
-    userDataDir: dir,
-    extraArgs,
-    proxy: profile.proxy,
-    fp: eff,
-    meta,
-    tabs: profile.tabs || [],
-  });
-  if (r.ok) {
-    profile.lastUsedAt = Date.now();
-    writeIndex(items);
-  }
-  return r;
 }
 function stop(id) { return fingerprint.stop(id); }
 function openDir(id) { return profileDir(id); }
 function setOnChange(fn) { fingerprint.setOnChange(fn); }
+function stopAll() { return fingerprint.stopAll(); }
+function anyRunning() { return fingerprint.anyRunning(); }
 
 module.exports = {
   init, list, get, create, update, remove, removeMany, setGroupMany, setProxyInfo,
-  browsers, launch, stop, openDir, setOnChange,
+  browsers, launch, stop, stopAll, anyRunning, openDir, setOnChange,
 };

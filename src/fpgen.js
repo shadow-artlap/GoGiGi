@@ -51,7 +51,9 @@ function effective(id, stored) {
   const nz = (a, b) => (a === undefined || a === null || a === '' ? b : a);
   return {
     webrtc: ['real', 'disabled', 'proxy-udp'].includes(s.webrtc) ? s.webrtc : 'proxy-udp',
-    userAgent: nz(s.userAgent, g.userAgent),
+    // Empty = derive from the real engine at launch (keeps UA, userAgentData and
+    // Client Hints consistent). A generated old-version UA would contradict them.
+    userAgent: nz(s.userAgent, ''),
     uaPlatform: nz(s.uaPlatform, g.uaPlatform),
     vendor: g.vendor,
     timezone: nz(s.timezone, ''),

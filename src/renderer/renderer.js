@@ -157,8 +157,10 @@ async function onAction(act, id) {
     if (launching.has(id)) return;
     launching.add(id); renderTable();
     if (p && p.browser === 'bundled' && !chromiumInstalled) toast('กำลังเตรียม Chromium', 'ครั้งแรกจะดาวน์โหลด ~150MB — ดูความคืบหน้าที่ ตั้งค่า');
-    const r = await window.gogigi.profiles.launch(id);
-    launching.delete(id);
+    let r;
+    try { r = await window.gogigi.profiles.launch(id); }
+    catch (e) { r = { ok: false, reason: String((e && e.message) || e) }; }
+    finally { launching.delete(id); }
     if (!r.ok) toast('เปิดไม่สำเร็จ', r.reason, 'err');
     else toast('เปิดโปรไฟล์แล้ว', p.name, 'ok');
     await Promise.all([loadProfiles(), refreshChromium()]);

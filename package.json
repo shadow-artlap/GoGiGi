@@ -1,6 +1,6 @@
 {
   "name": "gogigi",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "GoGiGi — Electron desktop app with GitHub-based auto-update",
   "main": "src/main.js",
   "author": "GoGiGi",
@@ -27,6 +27,7 @@
     "electron-updater": "^6.3.9",
     "http-proxy-agent": "^7.0.2",
     "https-proxy-agent": "^7.0.6",
+    "proxy-chain": "^2.5.9",
     "puppeteer-core": "^23.11.1",
     "socks-proxy-agent": "^8.0.5"
   }
