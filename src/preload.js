@@ -36,6 +36,12 @@ contextBridge.exposeInMainWorld('gogigi', {
     stop: (id) => ipcRenderer.invoke('profiles:stop', id),
     openDir: (id) => ipcRenderer.invoke('profiles:openDir', id),
     removeMany: (ids) => ipcRenderer.invoke('profiles:removeMany', ids),
+    listTrash: () => ipcRenderer.invoke('profiles:listTrash'),
+    restore: (ids) => ipcRenderer.invoke('profiles:restore', ids),
+    purge: (ids) => ipcRenderer.invoke('profiles:purge', ids),
+    emptyTrash: () => ipcRenderer.invoke('profiles:emptyTrash'),
+    clone: (id) => ipcRenderer.invoke('profiles:clone', id),
+    fpPreview: (seed) => ipcRenderer.invoke('fp:preview', seed),
     setGroupMany: (ids, group) => ipcRenderer.invoke('profiles:setGroupMany', { ids, group }),
     onChange: (cb) => {
       const h = () => typeof cb === 'function' && cb();
@@ -46,6 +52,11 @@ contextBridge.exposeInMainWorld('gogigi', {
 
   browsers: {
     list: () => ipcRenderer.invoke('browsers:list'),
+  },
+
+  cookies: {
+    import: (id) => ipcRenderer.invoke('cookies:import', id),
+    export: (id) => ipcRenderer.invoke('cookies:export', id),
   },
 
   proxy: {

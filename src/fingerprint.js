@@ -172,7 +172,7 @@ function uaMetadataFor(major, full) {
 }
 
 async function launch(opts) {
-  const { id, exePath, userDataDir, extraArgs = [], proxy, fp = {}, tabs = [], meta = {}, headless = false } = opts;
+  const { id, exePath, userDataDir, extraArgs = [], proxy, fp = {}, tabs = [], meta = {}, headless = false, seedKey } = opts;
   if (running.has(id) || launchingIds.has(id)) return { ok: false, reason: 'already-running' };
   launchingIds.add(id);
   let localProxy = null;
@@ -224,7 +224,7 @@ async function launch(opts) {
       } catch (e) { /* keep engine default */ }
     }
     const fpEff = { ...fp, userAgent: ua };
-    const injection = buildInjection(fpEff, seedFromId(id));
+    const injection = buildInjection(fpEff, seedFromId(seedKey || id));
 
     // One shared promise per page, so callers racing on the same page all wait
     // for the injection to be registered before navigating.
@@ -304,7 +304,44 @@ async function stopAll() { await Promise.all([...running.keys()].map((id) => sto
 function anyRunning() { return running.size > 0; }
 function isRunning(id) { return running.has(id); }
 
+// ---- cookies ---------------------------------------------------------------
+async function cdpGet(browser) {
+  const s = await browser.target().createCDPSession();
+  try { return (await s.send('Storage.getCookies')).cookies || []; }
+  finally { s.detach().catch(() => {}); }
+}
+// Set one at a time so a single malformed cookie doesn't reject the whole batch.
+async function cdpSet(browser, cookies) {
+  const s = await browser.target().createCDPSession();
+  let imported = 0; const failed = [];
+  try {
+    for (const c of cookies) {
+      try { await s.send('Storage.setCookies', { cookies: [c] }); imported++; }
+      catch (e) { failed.push(c.name); }
+    }
+  } finally { s.detach().catch(() => {}); }
+  return { imported, failed };
+}
+// A profile that isn't running: open its data headless, do the work, close.
+async function withHeadless(exePath, userDataDir, fn) {
+  const b = await puppeteer.launch({
+    executablePath: exePath, userDataDir, headless: true,
+    args: ['--no-first-run', '--no-default-browser-check'],
+  });
+  try { return await fn(b); } finally { await b.close().catch(() => {}); }
+}
+async function getCookies(id, exePath, userDataDir) {
+  const r = running.get(id);
+  if (r) return cdpGet(r.browser);
+  return withHeadless(exePath, userDataDir, cdpGet);
+}
+async function setCookies(id, exePath, userDataDir, cookies) {
+  const r = running.get(id);
+  if (r) return cdpSet(r.browser, cookies);
+  return withHeadless(exePath, userDataDir, (b) => cdpSet(b, cookies));
+}
+
 function _browser(id) { const r = running.get(id); return r && r.browser; } // test hook
 function _localProxy(id) { const r = running.get(id); return r && r.localProxy; }
 
-module.exports = { launch, stop, stopAll, anyRunning, isRunning, setOnChange, buildInjection, _browser, _localProxy };
+module.exports = { launch, stop, stopAll, anyRunning, isRunning, setOnChange, buildInjection, getCookies, setCookies, _browser, _localProxy };

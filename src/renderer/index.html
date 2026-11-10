@@ -45,9 +45,16 @@
             <div class="search"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4-4"/></svg><input type="text" id="searchProfiles" placeholder="ค้นหาชื่อ กลุ่ม หรือแท็ก" /></div>
             <select id="groupFilter" class="sel"></select>
             <button class="btn ghost" id="btnManageGroups">จัดการกลุ่ม</button>
+            <select id="sortBy" class="sel" title="เรียงลำดับ">
+              <option value="createdAt:-1">สร้างล่าสุด</option>
+              <option value="createdAt:1">สร้างเก่าสุด</option>
+              <option value="lastUsedAt:-1">เปิดล่าสุด</option>
+              <option value="name:1">ชื่อ ก–ฮ / A–Z</option>
+              <option value="group:1">กลุ่ม</option>
+            </select>
             <div class="spacer"></div>
             <button class="btn ghost" id="btnCloseAll" style="display:none;">ปิดทั้งหมด</button>
-            <span class="count" id="profileCount"></span>
+            <div class="seg" id="viewSeg"><button data-view="all" class="active">ทั้งหมด</button><button data-view="trash">ถังขยะ <span id="trashCount"></span></button></div>
           </div>
 
           <div class="bulkbar" id="bulkbar" style="display:none;">
@@ -55,7 +62,14 @@
             <div class="spacer"></div>
             <select id="bulkGroup" class="sel"></select>
             <button class="btn sm" id="bulkMove">ย้ายกลุ่ม</button>
-            <button class="btn sm danger" id="bulkDelete">ลบที่เลือก</button>
+            <button class="btn sm danger" id="bulkDelete">ย้ายไปถังขยะ</button>
+            <button class="btn sm" id="bulkRestore" style="display:none;">กู้คืนที่เลือก</button>
+            <button class="btn sm danger" id="bulkPurge" style="display:none;">ลบถาวร</button>
+          </div>
+          <div class="trashbar" id="trashbar" style="display:none;">
+            <span class="muted">โปรไฟล์ในถังขยะยังกู้คืนได้ — ลบถาวรแล้วข้อมูลเบราว์เซอร์จะหายด้วย</span>
+            <div class="spacer"></div>
+            <button class="btn sm danger" id="btnEmptyTrash">ล้างถังขยะ</button>
           </div>
 
           <div class="tablewrap" id="tablewrap">
@@ -67,6 +81,14 @@
               <tbody id="profileRows"></tbody>
             </table>
           </div>
+          <div class="pager" id="pager" style="display:none;">
+            <span class="count" id="pageInfo"></span>
+            <div class="spacer"></div>
+            <select id="pageSize" class="sel"><option value="25">25 / หน้า</option><option value="50" selected>50 / หน้า</option><option value="100">100 / หน้า</option></select>
+            <button class="btn sm ghost" id="pagePrev">ก่อนหน้า</button>
+            <button class="btn sm ghost" id="pageNext">ถัดไป</button>
+          </div>
+          <div class="menu" id="rowMenu" style="display:none;" role="menu"></div>
           <div id="profileEmpty" class="empty" style="display:none;">
             <div class="big">ยังไม่มีโปรไฟล์</div>
             <p>สร้างตัวตนเบราว์เซอร์แรก พร้อม proxy และ fingerprint ของมันเอง</p>
@@ -162,8 +184,13 @@
         <label class="chk"><input type="checkbox" id="f_autofp" checked /> ซิงค์ fingerprint (timezone / locale / พิกัด) ให้ตรงกับ proxy</label>
 
         <div class="fsec">Fingerprint</div>
+        <div class="fpbox">
+          <div><div class="fpl">เครื่องที่ระบบสุ่มให้โปรไฟล์นี้</div><div class="fpv mono" id="fpPreview">—</div></div>
+          <button type="button" class="btn sm" id="btnReroll">สุ่มเครื่องใหม่</button>
+        </div>
+        <p class="muted" style="margin:-4px 0 14px;">ช่องที่เว้นว่างจะใช้ค่าที่สุ่มนี้ · timezone/ภาษา/พิกัด จับคู่กับ proxy อัตโนมัติ · User-Agent อิงเวอร์ชันเบราว์เซอร์จริง</p>
         <div class="field"><label>WebRTC</label><div class="seg" id="f_webrtc"><button type="button" data-webrtc="real">จริง</button><button type="button" data-webrtc="proxy-udp">ตาม proxy</button><button type="button" data-webrtc="disabled">ปิด</button></div></div>
-        <div class="field"><label>User-Agent <span class="muted">(เว้นว่าง = ค่าเริ่มต้นของเบราว์เซอร์)</span></label><input type="text" id="f_ua" placeholder="Mozilla/5.0 …" /></div>
+        <div class="field"><label>User-Agent <span class="muted">(เว้นว่าง = อิงเวอร์ชันเบราว์เซอร์จริง — แนะนำ)</span></label><input type="text" id="f_ua" placeholder="Mozilla/5.0 …" /></div>
         <div class="field-row">
           <div class="field"><label>Platform</label><input type="text" id="f_uaplat" list="uaplatList" placeholder="Win32 / MacIntel / Linux x86_64" /><datalist id="uaplatList"><option value="Win32"></option><option value="MacIntel"></option><option value="Linux x86_64"></option></datalist></div>
           <div class="field"><label>Timezone</label><input type="text" id="f_tz" list="tzList" placeholder="Asia/Bangkok" /><datalist id="tzList"><option value="Asia/Bangkok"></option><option value="Asia/Vientiane"></option><option value="America/New_York"></option><option value="Europe/London"></option><option value="UTC"></option></datalist></div>

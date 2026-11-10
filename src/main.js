@@ -11,6 +11,7 @@ const chromium = require('./chromium');
 const groups = require('./groups');
 const extensions = require('./extensions');
 const proxytest = require('./proxytest');
+const cookies = require('./cookies');
 
 // --- Logging ---------------------------------------------------------------
 log.transports.file.level = 'info';
@@ -149,14 +150,63 @@ ipcMain.handle('profiles:list', () => profiles.list());
 ipcMain.handle('profiles:create', (_e, data) => profiles.create(data));
 ipcMain.handle('profiles:update', (_e, { id, data }) => profiles.update(id, data));
 ipcMain.handle('profiles:remove', (_e, id) => profiles.remove(id));
-ipcMain.handle('profiles:launch', async (_e, id) => {
-  const profile = profiles.list().find((x) => x.id === id);
+// Bundled profiles need the downloaded Chromium path; others resolve their own.
+async function exeFor(profile) {
   if (profile && profile.browser === 'bundled') {
     const r = await chromium.ensure((dl, total) => send('chromium:progress', { dl, total }));
-    if (!r.ok) return { ok: false, reason: 'chromium: ' + r.reason };
-    return profiles.launch(id, r.path);
+    if (!r.ok) throw new Error('chromium: ' + r.reason);
+    return r.path;
   }
-  return profiles.launch(id);
+  return undefined;
+}
+ipcMain.handle('profiles:launch', async (_e, id) => {
+  try { return await profiles.launch(id, await exeFor(profiles.get(id))); }
+  catch (e) { return { ok: false, reason: String((e && e.message) || e) }; }
+});
+ipcMain.handle('profiles:listTrash', () => profiles.listTrash());
+ipcMain.handle('profiles:restore', (_e, ids) => profiles.restore(ids));
+ipcMain.handle('profiles:purge', (_e, ids) => profiles.purge(ids));
+ipcMain.handle('profiles:emptyTrash', () => profiles.emptyTrash());
+ipcMain.handle('profiles:clone', (_e, id) => profiles.clone(id));
+ipcMain.handle('fp:preview', (_e, seed) => profiles.fpPreview(seed));
+
+// --- IPC: cookies ----------------------------------------------------------
+ipcMain.handle('cookies:import', async (_e, id) => {
+  const p = profiles.get(id);
+  if (!p) return { ok: false, reason: 'not-found' };
+  const pick = await dialog.showOpenDialog(mainWindow, {
+    title: `นำเข้า cookie — ${p.name}`,
+    filters: [{ name: 'Cookies', extensions: ['json', 'txt'] }, { name: 'All files', extensions: ['*'] }],
+    properties: ['openFile'],
+  });
+  if (pick.canceled || !pick.filePaths[0]) return { ok: false, reason: 'canceled' };
+  let list;
+  try { list = cookies.parse(fs.readFileSync(pick.filePaths[0], 'utf8')); }
+  catch (e) { return { ok: false, reason: 'อ่านไฟล์ไม่ได้: ' + e.message }; }
+  if (!list.length) return { ok: false, reason: 'ไม่พบ cookie ในไฟล์ (รองรับ JSON และ cookies.txt)' };
+  try {
+    const r = await profiles.importCookies(id, list, await exeFor(p));
+    if (!r.ok) return r;
+    if (!r.imported) return { ok: false, reason: `cookie ทั้ง ${list.length} รายการไม่ถูกต้อง (ตรวจ domain/วันหมดอายุในไฟล์)` };
+    return { ok: true, imported: r.imported, failed: r.failed || [], total: list.length };
+  } catch (e) { return { ok: false, reason: String((e && e.message) || e) }; }
+});
+ipcMain.handle('cookies:export', async (_e, id) => {
+  const p = profiles.get(id);
+  if (!p) return { ok: false, reason: 'not-found' };
+  let r;
+  try { r = await profiles.exportCookies(id, await exeFor(p)); }
+  catch (e) { return { ok: false, reason: String((e && e.message) || e) }; }
+  if (!r.ok) return r;
+  const safe = String(p.name || id).replace(/[\\/:*?"<>|]+/g, '_');
+  const save = await dialog.showSaveDialog(mainWindow, {
+    title: `ส่งออก cookie — ${p.name}`,
+    defaultPath: `${safe}-cookies.json`,
+    filters: [{ name: 'JSON', extensions: ['json'] }],
+  });
+  if (save.canceled || !save.filePath) return { ok: false, reason: 'canceled' };
+  fs.writeFileSync(save.filePath, JSON.stringify(r.cookies.map(cookies.fromCdp), null, 2));
+  return { ok: true, count: r.cookies.length, path: save.filePath };
 });
 ipcMain.handle('profiles:stop', (_e, id) => profiles.stop(id));
 ipcMain.handle('profiles:openDir', (_e, id) => {

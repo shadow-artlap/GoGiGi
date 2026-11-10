@@ -34,11 +34,22 @@ document.querySelectorAll('.side-nav button').forEach((btn) => {
 });
 
 // ======================= PROFILES =========================================
-let allProfiles = [], allGroups = [], allExtensions = [], browsersList = [];
+let allProfiles = [], trashProfiles = [], allGroups = [], allExtensions = [], browsersList = [];
 let selected = new Set();
 let launching = new Set();
 let lastProxyInfo = null;
 let proxyUse = {};
+let viewMode = 'all';            // 'all' | 'trash'
+let sortKey = 'createdAt', sortDir = -1;
+let page = 0, pageSize = 50;
+let modalSeed = '';
+
+const randomHex = () => [...crypto.getRandomValues(new Uint8Array(6))].map((b) => b.toString(16).padStart(2, '0')).join('');
+const shortGpu = (r) => {
+  if (!r) return '';
+  const m = String(r).match(/ANGLE \([^,]+, (.+?) (Direct3D|OpenGL|Vulkan|\()/);
+  return (m ? m[1] : String(r)).replace(/\(R\)|\(TM\)/g, '').trim();
+};
 
 const proxySummary = (p) => (!p || !p.host) ? '<span class="muted">ไม่มี</span>'
   : `<span class="mono">${esc(p.host)}:${esc(p.port)}</span>${p.username ? ' 🔒' : ''}`;
@@ -49,23 +60,20 @@ const proxyCell = (p) => {
     h += `<div class="sub"><span class="flag">${p.proxyInfo.flag || ''}</span> <span class="mono">${esc(p.proxyInfo.ip)}</span>${p.proxyInfo.country ? ' · ' + esc(p.proxyInfo.country) : ''}${p.proxyInfo.latency ? ' · ' + p.proxyInfo.latency + 'ms' : ''}</div>`;
   }
   const k = proxyKey(p.proxy);
-  if (k && proxyUse[k] > 1) {
-    h += `<div class="sub warn">⚠ ใช้ร่วม ${proxyUse[k]} โปรไฟล์</div>`;
-  }
+  if (k && proxyUse[k] > 1) h += `<div class="sub warn">⚠ ใช้ร่วม ${proxyUse[k]} โปรไฟล์</div>`;
   return h;
 };
 const readProxyForm = () => {
   const host = $('f_phost').value.trim();
   return host ? { scheme: $('f_pscheme').value, host, port: $('f_pport').value.trim(), username: $('f_puser').value.trim(), password: $('f_ppass').value } : null;
 };
-const fpSummary = (f) => {
-  if (!f) return '<span class="muted">-</span>';
-  const bits = [];
-  bits.push(`WebRTC:${f.webrtc || 'proxy-udp'}`);
-  if (f.timezone) bits.push(f.timezone);
-  if (f.locale) bits.push(f.locale);
-  if (f.canvasNoise !== false) bits.push('canvas✓');
-  return esc(bits.join(' · '));
+// What the profile looks like to websites (generated device + user overrides).
+const deviceCell = (p) => {
+  const d = p.device;
+  if (!d) return '<span class="muted">—</span>';
+  const top = `<span class="mono">${d.screen ? d.screen.width + '×' + d.screen.height : ''}</span> · ${d.cores || '?'}C · ${d.mem || '?'}GB`;
+  const sub = [shortGpu(d.gpu), d.tz].filter(Boolean).map(esc).join(' · ');
+  return `${top}${sub ? `<div class="sub">${sub}</div>` : ''}`;
 };
 const platformSub = (p) => {
   const plat = p.platform;
@@ -75,37 +83,77 @@ const platformSub = (p) => {
 
 function currentFilterGroup() { return $('groupFilter').value; }
 
-function visibleProfiles() {
-  const q = ($('searchProfiles').value || '').toLowerCase();
-  const g = currentFilterGroup();
-  return allProfiles.filter((p) => {
-    if (g === '__all__') { /* all */ }
-    else if (g === '__ungrouped__') { if (p.group) return false; }
-    else if (g && p.group !== g) return false;
-    if (!q) return true;
-    return p.name.toLowerCase().includes(q) || (p.group || '').toLowerCase().includes(q)
-      || (p.tags || []).join(',').toLowerCase().includes(q);
+function sortList(list) {
+  const k = sortKey, d = sortDir;
+  return list.slice().sort((a, b) => {
+    if (k === 'name' || k === 'group') {
+      const x = String(a[k] || ''), y = String(b[k] || '');
+      if (!x && y) return 1; if (x && !y) return -1; // empties last
+      return x.localeCompare(y, 'th', { numeric: true, sensitivity: 'base' }) * d;
+    }
+    return ((a[k] || 0) - (b[k] || 0)) * d;
   });
 }
 
+function visibleProfiles() {
+  const q = ($('searchProfiles').value || '').toLowerCase();
+  const g = currentFilterGroup();
+  const src = viewMode === 'trash' ? trashProfiles : allProfiles;
+  return sortList(src.filter((p) => {
+    if (g === '__ungrouped__') { if (p.group) return false; }
+    else if (g && g !== '__all__' && p.group !== g) return false;
+    if (!q) return true;
+    return p.name.toLowerCase().includes(q) || (p.group || '').toLowerCase().includes(q)
+      || (p.tags || []).join(',').toLowerCase().includes(q) || p.id.includes(q);
+  }));
+}
+
 function renderTable() {
+  const trash = viewMode === 'trash';
   const items = visibleProfiles();
   proxyUse = {};
   for (const p of allProfiles) { const k = proxyKey(p.proxy); if (k) proxyUse[k] = (proxyUse[k] || 0) + 1; }
-  $('profileCount').textContent = `${items.length}/${allProfiles.length}`;
-  const has = allProfiles.length > 0;
-  $('profileEmpty').style.display = has ? 'none' : 'block';
-  $('tablewrap').style.display = has ? '' : 'none';
-  $('profileRows').innerHTML = items.map((p) => {
-    const isLaunching = launching.has(p.id);
-    const dot = p.running ? 'on' : (isLaunching ? 'loading' : '');
-    const primary = isLaunching
-      ? `<button class="btn sm" disabled>กำลังเปิด…</button>`
-      : (p.running
-        ? `<button class="btn sm" data-act="stop" data-id="${p.id}">หยุด</button>`
-        : `<button class="btn sm primary" data-act="launch" data-id="${p.id}">เปิด</button>`);
+
+  const total = items.length;
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  if (page > pages - 1) page = pages - 1;
+  const from = page * pageSize;
+  const pageItems = items.slice(from, from + pageSize);
+
+  $('trashCount').textContent = trashProfiles.length ? `(${trashProfiles.length})` : '';
+  $('trashbar').style.display = trash && trashProfiles.length ? 'flex' : 'none';
+  const srcLen = trash ? trashProfiles.length : allProfiles.length;
+  $('tablewrap').style.display = srcLen ? '' : 'none';
+  $('profileEmpty').style.display = srcLen ? 'none' : 'block';
+  $('profileEmpty').querySelector('.big').textContent = trash ? 'ถังขยะว่าง' : 'ยังไม่มีโปรไฟล์';
+  $('profileEmpty').querySelector('p').textContent = trash ? 'โปรไฟล์ที่ย้ายไปถังขยะจะอยู่ที่นี่ และกู้คืนได้' : 'สร้างตัวตนเบราว์เซอร์แรก พร้อม proxy และ fingerprint ของมันเอง';
+  $('btnNewProfile2').style.display = trash ? 'none' : '';
+
+  $('pager').style.display = total > 25 || page > 0 ? 'flex' : 'none';
+  $('pageInfo').textContent = total ? `${from + 1}–${Math.min(from + pageSize, total)} จาก ${total}` : '0';
+  $('pagePrev').disabled = page <= 0;
+  $('pageNext').disabled = page >= pages - 1;
+
+  $('profileRows').innerHTML = pageItems.map((p) => {
+    let actions;
+    if (trash) {
+      actions = `<button class="btn sm" data-act="restore" data-id="${p.id}">กู้คืน</button>
+        <button class="btn sm danger" data-act="purge" data-id="${p.id}">ลบถาวร</button>`;
+    } else {
+      const isLaunching = launching.has(p.id);
+      const primary = isLaunching
+        ? `<button class="btn sm" disabled>กำลังเปิด…</button>`
+        : (p.running
+          ? `<button class="btn sm" data-act="stop" data-id="${p.id}">หยุด</button>`
+          : `<button class="btn sm primary" data-act="launch" data-id="${p.id}">เปิด</button>`);
+      actions = `${primary}
+        <button class="btn sm ghost" data-act="edit" data-id="${p.id}">แก้ไข</button>
+        <button class="btn sm ghost" data-act="menu" data-id="${p.id}" aria-label="ตัวเลือกเพิ่มเติม" aria-haspopup="menu">⋯</button>`;
+    }
+    const dot = p.running ? 'on' : (launching.has(p.id) ? 'loading' : '');
+    const when = trash ? `ลบ ${fmtDate(p.deletedAt)}` : fmtDate(p.createdAt);
     return `
-    <tr>
+    <tr class="${trash ? 'trash' : ''}">
       <td><input type="checkbox" class="rowchk" data-id="${p.id}" ${selected.has(p.id) ? 'checked' : ''} /></td>
       <td>
         <div class="pname"><span class="dot ${dot}"></span>${esc(p.name)}</div>
@@ -113,22 +161,16 @@ function renderTable() {
       </td>
       <td>${p.group ? `<span class="tag">${esc(p.group)}</span>` : '<span class="muted">—</span>'}</td>
       <td class="small">${proxyCell(p)}</td>
-      <td class="small">${fpSummary(p.fingerprint)}</td>
+      <td class="small">${deviceCell(p)}</td>
       <td class="small">${(p.tags || []).map((t) => `<span class="tag">${esc(t)}</span>`).join(' ') || '<span class="muted">—</span>'}</td>
-      <td class="small">${fmtDate(p.createdAt)}</td>
-      <td class="acts">
-        ${primary}
-        <span class="rowbtns">
-          <button class="btn sm ghost" data-act="iptest" data-id="${p.id}" title="ทดสอบ proxy" ${p.proxy ? '' : 'disabled'}>🌐</button>
-          <button class="btn sm ghost" data-act="edit" data-id="${p.id}">แก้ไข</button>
-          <button class="btn sm ghost" data-act="dir" data-id="${p.id}" title="เปิดโฟลเดอร์">📁</button>
-          <button class="btn sm danger" data-act="del" data-id="${p.id}" title="ลบ">ลบ</button>
-        </span>
-      </td>
+      <td class="small">${when}</td>
+      <td class="acts">${actions}</td>
     </tr>`;
   }).join('');
+
+  $('checkAll').checked = pageItems.length > 0 && pageItems.every((p) => selected.has(p.id));
   updateLive();
-  $('profileRows').querySelectorAll('button[data-act]').forEach((b) => b.addEventListener('click', () => onAction(b.dataset.act, b.dataset.id)));
+  $('profileRows').querySelectorAll('button[data-act]').forEach((b) => b.addEventListener('click', (e) => onAction(b.dataset.act, b.dataset.id, e)));
   $('profileRows').querySelectorAll('.rowchk').forEach((c) => c.addEventListener('change', () => {
     if (c.checked) selected.add(c.dataset.id); else selected.delete(c.dataset.id);
     updateBulk();
@@ -137,22 +179,52 @@ function renderTable() {
 }
 
 function updateBulk() {
-  // prune selections no longer visible
   const vis = new Set(visibleProfiles().map((p) => p.id));
   for (const id of [...selected]) if (!vis.has(id)) selected.delete(id);
+  const trash = viewMode === 'trash';
   $('bulkbar').style.display = selected.size ? 'flex' : 'none';
   $('bulkCount').textContent = `เลือก ${selected.size} รายการ`;
+  $('bulkGroup').style.display = trash ? 'none' : '';
+  $('bulkMove').style.display = trash ? 'none' : '';
+  $('bulkDelete').style.display = trash ? 'none' : '';
+  $('bulkRestore').style.display = trash ? '' : 'none';
+  $('bulkPurge').style.display = trash ? '' : 'none';
 }
 
 function updateLive() {
   const n = allProfiles.filter((p) => p.running).length;
   $('livePill').classList.toggle('on', n > 0);
   $('liveCount').textContent = n > 0 ? `${n} โปรไฟล์กำลังเปิดอยู่` : 'ไม่มีโปรไฟล์ที่เปิดอยู่';
-  $('btnCloseAll').style.display = n > 0 ? '' : 'none';
+  $('btnCloseAll').style.display = n > 0 && viewMode === 'all' ? '' : 'none';
 }
 
-async function onAction(act, id) {
+// ---- row "more" menu --------------------------------------------------------
+function closeMenu() { $('rowMenu').style.display = 'none'; }
+function openMenu(id, anchor) {
   const p = allProfiles.find((x) => x.id === id);
+  if (!p) return;
+  const m = $('rowMenu');
+  m.innerHTML = `
+    <button data-mact="iptest" ${p.proxy ? '' : 'disabled'}>ทดสอบ proxy</button>
+    <button data-mact="clone">คัดลอกเป็นโปรไฟล์ใหม่</button>
+    <hr />
+    <button data-mact="ckimport">นำเข้า cookie…</button>
+    <button data-mact="ckexport">ส่งออก cookie…</button>
+    <button data-mact="dir">เปิดโฟลเดอร์ข้อมูล</button>
+    <hr />
+    <button data-mact="del" class="danger">ย้ายไปถังขยะ</button>`;
+  m.style.display = 'block';
+  const r = anchor.getBoundingClientRect();
+  const w = m.offsetWidth, h = m.offsetHeight;
+  m.style.left = Math.max(8, Math.min(r.right - w, window.innerWidth - w - 8)) + 'px';
+  m.style.top = (r.bottom + h + 8 > window.innerHeight ? r.top - h - 4 : r.bottom + 4) + 'px';
+  m.querySelectorAll('button[data-mact]').forEach((b) => b.addEventListener('click', () => { closeMenu(); onAction(b.dataset.mact, id); }));
+  const first = m.querySelector('button:not([disabled])'); if (first) first.focus();
+}
+
+async function onAction(act, id, ev) {
+  const p = allProfiles.find((x) => x.id === id) || trashProfiles.find((x) => x.id === id);
+  if (act === 'menu') { openMenu(id, ev.currentTarget || ev.target); return; }
   if (act === 'launch') {
     if (launching.has(id)) return;
     launching.add(id); renderTable();
@@ -173,14 +245,34 @@ async function onAction(act, id) {
   } else if (act === 'stop') { await window.gogigi.profiles.stop(id); await loadProfiles(); }
   else if (act === 'edit') { openModal(p); }
   else if (act === 'dir') { window.gogigi.profiles.openDir(id); }
-  else if (act === 'del') {
-    if (p.running) { toast('ปิดโปรไฟล์ก่อน', 'ต้องหยุดโปรไฟล์ก่อนจึงจะลบได้', 'err'); return; }
-    if (confirm(`ลบโปรไฟล์ "${p.name}"?`)) { await window.gogigi.profiles.remove(id); await loadProfiles(); toast('ลบแล้ว', p.name); }
+  else if (act === 'clone') {
+    const r = await window.gogigi.profiles.clone(id);
+    if (r.ok) { toast('คัดลอกแล้ว', `${r.profile.name} — เครื่องใหม่ ข้อมูลเบราว์เซอร์ว่าง`, 'ok'); await loadProfiles(); }
+    else toast('คัดลอกไม่ได้', r.reason, 'err');
+  } else if (act === 'ckimport') {
+    toast('นำเข้า cookie', `เลือกไฟล์ JSON หรือ cookies.txt ของ ${p.name}`);
+    const r = await window.gogigi.cookies.import(id);
+    if (r.ok) toast('นำเข้า cookie แล้ว', `${r.imported}/${r.total} รายการ${r.failed && r.failed.length ? ` · ข้าม ${r.failed.length} ที่ไม่ถูกต้อง` : ''}`, 'ok');
+    else if (r.reason !== 'canceled') toast('นำเข้า cookie ไม่ได้', r.reason, 'err');
+  } else if (act === 'ckexport') {
+    toast('กำลังอ่าน cookie', p.name);
+    const r = await window.gogigi.cookies.export(id);
+    if (r.ok) toast('ส่งออก cookie แล้ว', `${r.count} รายการ`, 'ok');
+    else if (r.reason !== 'canceled') toast('ส่งออก cookie ไม่ได้', r.reason, 'err');
+  } else if (act === 'del') {
+    if (p.running) { toast('ปิดโปรไฟล์ก่อน', 'ต้องหยุดโปรไฟล์ก่อนจึงจะย้ายไปถังขยะได้', 'err'); return; }
+    await window.gogigi.profiles.remove(id); await loadProfiles();
+    toast('ย้ายไปถังขยะแล้ว', `${p.name} — กู้คืนได้ที่แท็บถังขยะ`);
+  } else if (act === 'restore') {
+    await window.gogigi.profiles.restore([id]); await loadProfiles(); toast('กู้คืนแล้ว', p.name, 'ok');
+  } else if (act === 'purge') {
+    if (!confirm(`ลบ "${p.name}" ถาวร? ข้อมูลเบราว์เซอร์ (cookie, การล็อกอิน) จะหายและกู้คืนไม่ได้`)) return;
+    await window.gogigi.profiles.purge([id]); await loadProfiles(); toast('ลบถาวรแล้ว', p.name);
   }
 }
 
 async function loadProfiles() {
-  allProfiles = await window.gogigi.profiles.list();
+  [allProfiles, trashProfiles] = await Promise.all([window.gogigi.profiles.list(), window.gogigi.profiles.listTrash()]);
   renderTable();
 }
 
@@ -232,13 +324,26 @@ function renderExtPicker(selectedIds) {
     : '<div class="muted">ยังไม่มี extension — เพิ่มได้ที่แท็บ Extensions</div>';
 }
 
+// Show the generated device and use it as placeholders for the empty fields.
+async function renderFpPreview() {
+  const g = await window.gogigi.profiles.fpPreview(modalSeed);
+  if (!g) return;
+  $('fpPreview').textContent = `${g.screen.width}×${g.screen.height} · ${g.hardwareConcurrency} cores · ${g.deviceMemory} GB · ${shortGpu(g.webglRenderer)}`;
+  $('f_scrw').placeholder = String(g.screen.width); $('f_scrh').placeholder = String(g.screen.height);
+  $('f_hc').placeholder = String(g.hardwareConcurrency); $('f_dm').placeholder = String(g.deviceMemory);
+  $('f_glv').placeholder = g.webglVendor; $('f_glr').placeholder = g.webglRenderer;
+  $('f_uaplat').placeholder = g.uaPlatform;
+  $('f_tz').placeholder = 'ตาม proxy อัตโนมัติ'; $('f_locale').placeholder = 'ตาม proxy อัตโนมัติ';
+  $('f_ua').placeholder = 'อิงเวอร์ชันเบราว์เซอร์จริง (อัตโนมัติ)';
+}
+
 async function openModal(p) {
   await ensureBrowsers();
   const ed = !!p;
   $('modalTitle').textContent = ed ? 'แก้ไขโปรไฟล์' : 'โปรไฟล์ใหม่';
   $('f_id').value = ed ? p.id : '';
   $('f_name').value = ed ? p.name : '';
-  $('f_group').value = ed ? (p.group || '') : '';
+  $('f_group').value = ed ? (p.group || '') : (['__all__', '__ungrouped__'].includes(currentFilterGroup()) ? '' : currentFilterGroup());
   $('f_browser').value = ed ? p.browser : (browsersList[0] ? browsersList[0].id : 'bundled');
   const pf = (ed && p.platform) || {};
   $('f_pfname').value = pf.name || ''; $('f_pfacct').value = pf.account || ''; $('f_pfpass').value = pf.password || ''; $('f_pf2fa').value = pf.twofa || '';
@@ -261,7 +366,10 @@ async function openModal(p) {
   renderExtPicker(ed ? (p.extensions || []) : []);
   $('f_tags').value = ed ? (p.tags || []).join(', ') : '';
   $('f_remark').value = ed ? (p.remark || '') : '';
+  modalSeed = ed ? (p.fpSeed || p.id) : randomHex();
+  await renderFpPreview();
   $('modal').style.display = 'flex';
+  $('f_name').focus();
 }
 function closeModal() { $('modal').style.display = 'none'; }
 
@@ -289,12 +397,14 @@ function readModal() {
     tags: $('f_tags').value,
     remark: $('f_remark').value.trim(),
     proxyInfo: host ? lastProxyInfo : null,
+    fpSeed: modalSeed,
   };
 }
 async function saveModal() {
   const data = readModal(); const id = $('f_id').value;
   if (id) await window.gogigi.profiles.update(id, data); else await window.gogigi.profiles.create(data);
   closeModal(); await loadProfiles();
+  toast(id ? 'บันทึกแล้ว' : 'สร้างโปรไฟล์แล้ว', data.name, 'ok');
 }
 
 function initProfilesUI() {
@@ -306,12 +416,21 @@ function initProfilesUI() {
     toast('ปิดทั้งหมดแล้ว', `${run.length} โปรไฟล์`);
     await loadProfiles();
   });
-  $('searchProfiles').addEventListener('input', renderTable);
-  $('groupFilter').addEventListener('change', () => { selected.clear(); renderTable(); });
+  $('searchProfiles').addEventListener('input', () => { page = 0; renderTable(); });
+  $('groupFilter').addEventListener('change', () => { selected.clear(); page = 0; renderTable(); });
+  $('sortBy').addEventListener('change', (e) => { const [k, d] = e.target.value.split(':'); sortKey = k; sortDir = Number(d); page = 0; renderTable(); });
+  $('pageSize').addEventListener('change', (e) => { pageSize = Number(e.target.value); page = 0; renderTable(); });
+  $('pagePrev').addEventListener('click', () => { if (page > 0) { page--; renderTable(); } });
+  $('pageNext').addEventListener('click', () => { page++; renderTable(); });
+  document.querySelectorAll('#viewSeg button').forEach((b) => b.addEventListener('click', () => {
+    viewMode = b.dataset.view;
+    document.querySelectorAll('#viewSeg button').forEach((x) => x.classList.toggle('active', x === b));
+    selected.clear(); page = 0; renderTable();
+  }));
   $('btnManageGroups').addEventListener('click', openGroups);
   $('checkAll').addEventListener('change', (e) => {
-    const vis = visibleProfiles();
-    if (e.target.checked) vis.forEach((p) => selected.add(p.id)); else selected.clear();
+    const items = visibleProfiles().slice(page * pageSize, page * pageSize + pageSize);
+    items.forEach((p) => (e.target.checked ? selected.add(p.id) : selected.delete(p.id)));
     renderTable();
   });
   $('bulkMove').addEventListener('click', async () => {
@@ -320,8 +439,36 @@ function initProfilesUI() {
     selected.clear(); await loadProfiles(); toast('ย้ายกลุ่มแล้ว', `${n} โปรไฟล์`);
   });
   $('bulkDelete').addEventListener('click', async () => {
-    if (confirm(`ลบ ${selected.size} โปรไฟล์ที่เลือก?`)) { const n = selected.size; await window.gogigi.profiles.removeMany([...selected]); selected.clear(); await loadProfiles(); toast('ลบแล้ว', `${n} โปรไฟล์`); }
+    const ids = [...selected];
+    const r = await window.gogigi.profiles.removeMany(ids);
+    selected.clear(); await loadProfiles();
+    if (r.ok) toast('ย้ายไปถังขยะแล้ว', `${r.moved} โปรไฟล์${r.busy ? ` · ข้าม ${r.busy} ที่เปิดอยู่` : ''}`);
+    else toast('ย้ายไม่ได้', 'โปรไฟล์ที่เลือกเปิดอยู่ทั้งหมด — ปิดก่อน', 'err');
   });
+  $('bulkRestore').addEventListener('click', async () => {
+    const n = selected.size; await window.gogigi.profiles.restore([...selected]);
+    selected.clear(); await loadProfiles(); toast('กู้คืนแล้ว', `${n} โปรไฟล์`, 'ok');
+  });
+  $('bulkPurge').addEventListener('click', async () => {
+    const n = selected.size;
+    if (!confirm(`ลบ ${n} โปรไฟล์ถาวร? ข้อมูลเบราว์เซอร์จะหายและกู้คืนไม่ได้`)) return;
+    await window.gogigi.profiles.purge([...selected]); selected.clear(); await loadProfiles(); toast('ลบถาวรแล้ว', `${n} โปรไฟล์`);
+  });
+  $('btnEmptyTrash').addEventListener('click', async () => {
+    const n = trashProfiles.length;
+    if (!confirm(`ล้างถังขยะ ${n} โปรไฟล์? ลบถาวรและกู้คืนไม่ได้`)) return;
+    await window.gogigi.profiles.emptyTrash(); selected.clear(); await loadProfiles(); toast('ล้างถังขยะแล้ว', `${n} โปรไฟล์`);
+  });
+  $('btnReroll').addEventListener('click', async () => {
+    if ($('f_id').value && !confirm('เปลี่ยนเป็นเครื่องใหม่? บัญชีที่ล็อกอินไว้อาจถูกขอยืนยันตัวตนเพราะอุปกรณ์เปลี่ยน')) return;
+    modalSeed = randomHex(); await renderFpPreview();
+  });
+  // menu dismissal
+  document.addEventListener('click', (e) => { if (!e.target.closest('#rowMenu') && !e.target.closest('[data-act="menu"]')) closeMenu(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); });
+  const scroller = document.querySelector('.content'); if (scroller) scroller.addEventListener('scroll', closeMenu, { passive: true });
+  window.addEventListener('resize', closeMenu);
+
   $('modalClose').addEventListener('click', closeModal);
   $('modalCancel').addEventListener('click', closeModal);
   $('modalSave').addEventListener('click', saveModal);
@@ -334,7 +481,7 @@ function initProfilesUI() {
     const r = await window.gogigi.proxy.test(proxy);
     if (!r.ok) { $('f_proxyResult').textContent = '❌ ' + r.reason; lastProxyInfo = null; return; }
     $('f_proxyResult').textContent = `✓ ${r.flag || ''} ${r.ip} · ${r.country} · ${r.latency}ms`;
-    lastProxyInfo = { ip: r.ip, country: r.country, countryCode: r.countryCode, flag: r.flag, timezone: r.timezone, latency: r.latency, testedAt: r.testedAt };
+    lastProxyInfo = { ip: r.ip, country: r.country, countryCode: r.countryCode, flag: r.flag, timezone: r.timezone, lat: r.lat, lon: r.lon, latency: r.latency, testedAt: r.testedAt };
     if ($('f_autofp').checked) {
       if (r.timezone) $('f_tz').value = r.timezone;
       if (r.locale) $('f_locale').value = r.locale;

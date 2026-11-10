@@ -93,14 +93,25 @@ function newProfile(d = {}) {
     tags: toArray(d.tags),
     remark: d.remark || '',
     proxyInfo: d.proxyInfo || null,
+    fpSeed: d.fpSeed || null,
     createdAt: Date.now(),
     lastUsedAt: null,
+    deletedAt: null,
   };
 }
 
-function withRunning(p) { return { ...p, running: fingerprint.isRunning(p.id) }; }
+// Summary of the effective (generated + user) device, for the table and form.
+function deviceOf(p) {
+  const e = fpgen.effective(p.fpSeed || p.id, p.fingerprint || {});
+  return {
+    screen: e.screen, cores: e.hardwareConcurrency, mem: e.deviceMemory, gpu: e.webglRenderer,
+    tz: e.timezone || (p.proxyInfo && p.proxyInfo.timezone) || '', webrtc: e.webrtc,
+  };
+}
+function withRunning(p) { return { ...p, running: fingerprint.isRunning(p.id), device: deviceOf(p) }; }
 
-function list() { return readIndex().map(withRunning); }
+function list() { return readIndex().filter((p) => !p.deletedAt).map(withRunning); }
+function listTrash() { return readIndex().filter((p) => p.deletedAt).map(withRunning); }
 function get(id) { return readIndex().find((x) => x.id === id); }
 
 function create(d) {
@@ -128,6 +139,7 @@ function update(id, d) {
     tags: d.tags !== undefined ? toArray(d.tags) : cur.tags,
     remark: d.remark ?? cur.remark,
     proxyInfo: d.proxyInfo !== undefined ? d.proxyInfo : cur.proxyInfo,
+    fpSeed: d.fpSeed !== undefined ? d.fpSeed : cur.fpSeed,
   };
   writeIndex(items);
   return { ok: true, profile: withRunning(items[i]) };
@@ -141,17 +153,33 @@ function setProxyInfo(id, info) {
   writeIndex(items);
   return { ok: true };
 }
-function remove(id) {
-  if (fingerprint.isRunning(id)) return { ok: false, reason: 'running' };
-  writeIndex(readIndex().filter((x) => x.id !== id));
-  try { fs.rmSync(profileDir(id), { recursive: true, force: true }); } catch {}
-  return { ok: true };
-}
+// Delete = move to trash (recoverable). Purge removes the record and its data.
+function remove(id) { return removeMany([id]); }
 function removeMany(ids) {
   const set = new Set(ids);
-  const keep = readIndex().filter((x) => {
-    if (set.has(x.id) && !fingerprint.isRunning(x.id)) {
-      try { fs.rmSync(profileDir(x.id), { recursive: true, force: true }); } catch {}
+  const items = readIndex();
+  let moved = 0, busy = 0;
+  for (const p of items) {
+    if (!set.has(p.id) || p.deletedAt) continue;
+    if (fingerprint.isRunning(p.id)) { busy++; continue; }
+    p.deletedAt = Date.now(); moved++;
+  }
+  writeIndex(items);
+  if (!moved && busy) return { ok: false, reason: 'running' };
+  return { ok: true, moved, busy };
+}
+function restore(ids) {
+  const set = new Set(ids);
+  const items = readIndex();
+  for (const p of items) if (set.has(p.id)) p.deletedAt = null;
+  writeIndex(items);
+  return { ok: true };
+}
+function purge(ids) {
+  const set = new Set(ids);
+  const keep = readIndex().filter((p) => {
+    if (set.has(p.id) && p.deletedAt) {
+      try { fs.rmSync(profileDir(p.id), { recursive: true, force: true }); } catch {}
       return false;
     }
     return true;
@@ -159,6 +187,25 @@ function removeMany(ids) {
   writeIndex(keep);
   return { ok: true };
 }
+function emptyTrash() { return purge(readIndex().filter((p) => p.deletedAt).map((p) => p.id)); }
+
+// Clone = same settings, new identity: new id, new fingerprint, empty browser data.
+function clone(id) {
+  const items = readIndex();
+  const src = items.find((x) => x.id === id);
+  if (!src) return { ok: false, reason: 'not-found' };
+  const c = JSON.parse(JSON.stringify(src));
+  c.id = crypto.randomBytes(6).toString('hex');
+  c.name = `${src.name} (สำเนา)`;
+  c.createdAt = Date.now(); c.lastUsedAt = null; c.deletedAt = null; c.fpSeed = null;
+  items.push(c);
+  writeIndex(items);
+  return { ok: true, profile: withRunning(c) };
+}
+
+// Generated (automatic) fingerprint for a seed — shown in the edit form.
+function fpPreview(seedKey) { return fpgen.effective(String(seedKey || 'x'), {}); }
+
 function setGroupMany(ids, group) {
   const set = new Set(ids);
   const items = readIndex();
@@ -218,7 +265,8 @@ async function launch(id, exeOverride, opts = {}) {
     }
 
     // Effective fingerprint: distinct per profile (even behind the same proxy).
-    const eff = fpgen.effective(id, profile.fingerprint || {});
+    const seedKey = profile.fpSeed || id;
+    const eff = fpgen.effective(seedKey, profile.fingerprint || {});
 
     // Keep the clock/language consistent with the proxy's exit country when the
     // user hasn't set them — a system timezone that contradicts the IP is one of
@@ -250,7 +298,7 @@ async function launch(id, exeOverride, opts = {}) {
     const r = await fingerprint.launch({
       id, exePath: exe, userDataDir: dir, extraArgs,
       proxy: profile.proxy, fp: eff, meta, tabs: profile.tabs || [],
-      headless: !!opts.headless,
+      headless: !!opts.headless, seedKey,
     });
     if (r.ok) profile.lastUsedAt = Date.now();
     writeIndex(items); // persists lastUsedAt and any freshly detected proxyInfo
@@ -260,12 +308,28 @@ async function launch(id, exeOverride, opts = {}) {
   }
 }
 function stop(id) { return fingerprint.stop(id); }
+async function exportCookies(id, exeOverride) {
+  const p = get(id); if (!p) return { ok: false, reason: 'not-found' };
+  const exe = exeOverride || resolveBrowser(p.browser);
+  if (!exe) return { ok: false, reason: `ไม่พบเบราว์เซอร์: ${p.browser}` };
+  try { return { ok: true, cookies: await fingerprint.getCookies(id, exe, profileDir(id)) }; }
+  catch (e) { return { ok: false, reason: String((e && e.message) || e) }; }
+}
+async function importCookies(id, cdpCookies, exeOverride) {
+  const p = get(id); if (!p) return { ok: false, reason: 'not-found' };
+  const exe = exeOverride || resolveBrowser(p.browser);
+  if (!exe) return { ok: false, reason: `ไม่พบเบราว์เซอร์: ${p.browser}` };
+  fs.mkdirSync(profileDir(id), { recursive: true });
+  try { const r = await fingerprint.setCookies(id, exe, profileDir(id), cdpCookies); return { ok: true, imported: r.imported, failed: r.failed }; }
+  catch (e) { return { ok: false, reason: String((e && e.message) || e) }; }
+}
 function openDir(id) { return profileDir(id); }
 function setOnChange(fn) { fingerprint.setOnChange(fn); }
 function stopAll() { return fingerprint.stopAll(); }
 function anyRunning() { return fingerprint.anyRunning(); }
 
 module.exports = {
-  init, list, get, create, update, remove, removeMany, setGroupMany, setProxyInfo,
+  init, list, listTrash, get, create, update, remove, removeMany, restore, purge, emptyTrash, clone, fpPreview,
+  exportCookies, importCookies, setGroupMany, setProxyInfo,
   browsers, launch, stop, stopAll, anyRunning, openDir, setOnChange,
 };
