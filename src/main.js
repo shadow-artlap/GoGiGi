@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, shell, nativeTheme, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, nativeTheme, dialog, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -70,7 +70,44 @@ function createWindow() {
     },
   });
 
-  mainWindow.removeMenu();
+  // No visible menu bar — but keep an Edit menu so Ctrl+C / Ctrl+V / Ctrl+X /
+  // Ctrl+A / Ctrl+Z work (removeMenu() silently kills those shortcuts).
+  mainWindow.setMenu(Menu.buildFromTemplate([{
+    label: 'Edit',
+    submenu: [
+      { role: 'undo' }, { role: 'redo' }, { type: 'separator' },
+      { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' },
+      ...(isDev ? [{ role: 'toggleDevTools' }, { role: 'reload' }] : []),
+    ],
+  }]));
+  mainWindow.setMenuBarVisibility(false);
+  mainWindow.setAutoHideMenuBar(false);
+  // Belt and braces: run the edit commands straight from the key event, so
+  // copy/paste keeps working even if the hidden menu's accelerators don't fire.
+  mainWindow.webContents.on('before-input-event', (e, input) => {
+    if (input.type !== 'keyDown' || !(input.control || input.meta) || input.alt) return;
+    const k = String(input.key || '').toLowerCase();
+    const wc = mainWindow.webContents;
+    const map = { v: () => wc.paste(), c: () => wc.copy(), x: () => wc.cut(), a: () => wc.selectAll(), z: () => (input.shift ? wc.redo() : wc.undo()), y: () => wc.redo() };
+    if (map[k]) { e.preventDefault(); map[k](); }
+  });
+  // Right-click menu for text fields (Electron shows none by default).
+  mainWindow.webContents.on('context-menu', (_e, p) => {
+    const f = p.editFlags || {};
+    const items = [];
+    if (p.isEditable) {
+      items.push(
+        { label: 'ตัด', role: 'cut', enabled: f.canCut },
+        { label: 'คัดลอก', role: 'copy', enabled: f.canCopy },
+        { label: 'วาง', role: 'paste', enabled: f.canPaste },
+        { type: 'separator' },
+        { label: 'เลือกทั้งหมด', role: 'selectAll', enabled: f.canSelectAll },
+      );
+    } else if (p.selectionText && p.selectionText.trim()) {
+      items.push({ label: 'คัดลอก', role: 'copy' });
+    }
+    if (items.length) Menu.buildFromTemplate(items).popup({ window: mainWindow });
+  });
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   if (isDev) mainWindow.webContents.openDevTools({ mode: 'detach' });
   mainWindow.on('closed', () => { mainWindow = null; });
