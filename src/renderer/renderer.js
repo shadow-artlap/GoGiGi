@@ -350,7 +350,7 @@ async function openModal(p) {
   $('f_tabs').value = ed ? (p.tabs || []).join('\n') : '';
   const px = (ed && p.proxy) || {};
   $('f_pscheme').value = px.scheme || 'http'; $('f_phost').value = px.host || ''; $('f_pport').value = px.port || '';
-  $('f_puser').value = px.username || ''; $('f_ppass').value = px.password || '';
+  $('f_puser').value = px.username || ''; $('f_ppass').value = px.password || ''; $('f_ppaste').value = '';
   lastProxyInfo = ed ? (p.proxyInfo || null) : null;
   $('f_proxyResult').textContent = lastProxyInfo ? `✓ ${lastProxyInfo.flag || ''} ${lastProxyInfo.ip}${lastProxyInfo.country ? ' · ' + lastProxyInfo.country : ''}` : '';
   $('f_autofp').checked = true;
@@ -487,6 +487,28 @@ function initProfilesUI() {
       if (r.locale) $('f_locale').value = r.locale;
       if (r.lat != null) { $('f_geolat').value = r.lat; $('f_geolon').value = r.lon; }
     }
+  });
+  // Paste a whole proxy line (any provider format) -> fill every field.
+  const fillProxy = (text) => {
+    const px = window.parseProxy(text);
+    if (!px) return false;
+    if (px.scheme) $('f_pscheme').value = px.scheme;
+    $('f_phost').value = px.host; $('f_pport').value = px.port;
+    $('f_puser').value = px.username; $('f_ppass').value = px.password;
+    lastProxyInfo = null;
+    $('f_proxyResult').textContent = `✓ แยกช่องให้แล้ว — ${px.host}:${px.port}${px.username ? ' · มีรหัสผ่าน' : ''}`;
+    return true;
+  };
+  $('f_ppaste').addEventListener('input', () => {
+    const v = $('f_ppaste').value.trim();
+    if (!v) return;
+    if (fillProxy(v)) $('f_ppaste').value = '';
+    else $('f_proxyResult').textContent = 'รูปแบบไม่ถูกต้อง — ใช้ host:port:user:pass หรือ user:pass@host:port';
+  });
+  // Pasting a full line straight into Host works too.
+  $('f_phost').addEventListener('paste', (e) => {
+    const t = (e.clipboardData || window.clipboardData).getData('text');
+    if (/[:@\s]/.test(t.trim()) && fillProxy(t)) e.preventDefault();
   });
   // Editing proxy invalidates the cached IP result.
   ['f_phost', 'f_pport', 'f_pscheme', 'f_puser', 'f_ppass'].forEach((id) => {
