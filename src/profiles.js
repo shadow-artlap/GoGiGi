@@ -271,17 +271,31 @@ async function launch(id, exeOverride, opts = {}) {
     // Keep the clock/language consistent with the proxy's exit country when the
     // user hasn't set them — a system timezone that contradicts the IP is one of
     // the strongest detection signals.
-    if (profile.proxy && profile.proxy.host && (!eff.timezone || !eff.locale || !eff.geo)) {
-      let info = profile.proxyInfo && profile.proxyInfo.timezone ? profile.proxyInfo : null;
-      if (!info || info.lat == null) {
-        const t = await proxytest.test(profile.proxy, 8000);
-        if (t.ok) {
-          info = t;
-          profile.proxyInfo = {
-            ip: t.ip, country: t.country, countryCode: t.countryCode, flag: t.flag,
-            timezone: t.timezone, lat: t.lat, lon: t.lon, latency: t.latency, testedAt: t.testedAt,
-          };
+    // Checked LIVE on every launch: rotating/residential proxies change exit
+    // country between sessions, and a stale timezone is worse than none.
+    let proxyWarn = '';
+    if (profile.proxy && profile.proxy.host) {
+      const t = await proxytest.test(profile.proxy, 10000);
+      let info = null;
+      if (t.ok) {
+        info = t;
+        const prev = profile.proxyInfo;
+        if (prev && prev.countryCode && t.countryCode && prev.countryCode !== t.countryCode) {
+          proxyWarn = `IP ของ proxy เปลี่ยนประเทศ (${prev.countryCode} → ${t.countryCode}) — ปรับเวลา/ภาษาให้ตรงแล้ว`;
         }
+        profile.proxyInfo = {
+          ip: t.ip, country: t.country, countryCode: t.countryCode, flag: t.flag,
+          timezone: t.timezone, lat: t.lat, lon: t.lon, latency: t.latency, testedAt: t.testedAt,
+        };
+      } else if (t.kind === 'proxy') {
+        // Never open a profile on a dead proxy: every site would fail, and the
+        // user may "fix" it by switching networks with the account logged in.
+        return { ok: false, reason: `proxy ใช้งานไม่ได้ (${t.reason}) — ตรวจ host/port/รหัสผ่าน แล้วลองใหม่` };
+      } else if (profile.proxyInfo && profile.proxyInfo.timezone) {
+        info = profile.proxyInfo; // lookup services busy: last known location
+        proxyWarn = 'ตรวจตำแหน่ง proxy ไม่ได้ชั่วคราว — ใช้ข้อมูลล่าสุดที่บันทึกไว้';
+      } else {
+        proxyWarn = 'ตรวจตำแหน่ง proxy ไม่ได้ — เวลา/ภาษาอาจไม่ตรงกับ IP (ตั้งเองในแท็บลายนิ้วมือได้)';
       }
       if (info) {
         if (!eff.timezone && info.timezone) eff.timezone = info.timezone;
@@ -302,6 +316,7 @@ async function launch(id, exeOverride, opts = {}) {
     });
     if (r.ok) profile.lastUsedAt = Date.now();
     writeIndex(items); // persists lastUsedAt and any freshly detected proxyInfo
+    if (r.ok && proxyWarn) r.warning = proxyWarn;
     return r;
   } catch (e) {
     return { ok: false, reason: String((e && e.message) || e) };

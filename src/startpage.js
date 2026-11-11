@@ -203,16 +203,29 @@ set('f_ua', navigator.userAgent);
 
 // live exit IP (through the profile proxy)
 const t0 = Date.now();
-fetch('https://ipwho.is/').then(r=>r.json()).then(j=>{
-  const ms = Date.now()-t0;
-  if (j && j.success !== false) {
-    $('ip').textContent = j.ip;
-    $('flag').textContent = flagOf(j.country_code);
-    $('place').textContent = [j.country, j.region, j.city].filter(Boolean).join(' · ');
-    $('lat').textContent = ms + ' ms';
-    const btn = $('ipcopy'); btn.style.display=''; copyBtn(btn, j.ip);
-  } else { $('place').textContent='ตรวจตำแหน่งไม่ได้ — proxy อาจใช้ไม่ได้'; $('ip').textContent='—'; }
-}).catch(()=>{ $('place').textContent='ตรวจตำแหน่งไม่ได้ — ไม่มีการเชื่อมต่อ'; $('ip').textContent='—'; });
+// Several services: free ones rate-limit (429) when many profiles share an IP.
+const LOOKUPS = [
+  ['https://ipwho.is/', j => j.success !== false && j.ip && { ip: j.ip, cc: j.country_code, place: [j.country, j.region, j.city] }],
+  ['https://ipinfo.io/json', j => j.ip && { ip: j.ip, cc: j.country, place: [j.country, j.region, j.city] }],
+  ['https://api.country.is/', j => j.ip && { ip: j.ip, cc: j.country, place: [j.country] }],
+];
+(async () => {
+  for (const [url, map] of LOOKUPS) {
+    try {
+      const ctl = new AbortController(); const tm = setTimeout(() => ctl.abort(), 7000);
+      const res = await fetch(url, { signal: ctl.signal, cache: 'no-store' }); clearTimeout(tm);
+      if (!res.ok) continue;
+      const g = map(await res.json()); if (!g) continue;
+      $('ip').textContent = g.ip;
+      $('flag').textContent = flagOf(g.cc);
+      $('place').textContent = g.place.filter(Boolean).join(' · ');
+      $('lat').textContent = (Date.now() - t0) + ' ms';
+      const btn = $('ipcopy'); btn.style.display = ''; copyBtn(btn, g.ip);
+      return;
+    } catch (e) { /* try next */ }
+  }
+  $('place').textContent = 'ตรวจตำแหน่งไม่ได้ — proxy อาจใช้ไม่ได้ หรือบริการตรวจ IP ไม่ตอบ'; $('ip').textContent = '—';
+})();
 
 // ---- 2FA ----
 const raw2fa = (D.twofa||'').replace(/\\s/g,'');

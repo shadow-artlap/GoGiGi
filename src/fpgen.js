@@ -4,9 +4,19 @@
 // yields the same realistic fingerprint, but different profiles differ — so two
 // profiles behind the same proxy still look like different devices.
 
-const SCREENS = [[1920, 1080], [1536, 864], [1366, 768], [1440, 900], [1600, 900], [2560, 1440], [1280, 720], [1920, 1200]];
-const CORES = [4, 6, 8, 12, 16];
-const MEM = [4, 8, 16];
+//
+// Only values that can be changed WITHOUT contradicting other signals are
+// generated. Screen size and GPU stay real by default: a spoofed screen never
+// matches window geometry/media queries, and a spoofed GPU string is exposed by
+// WebGPU adapter info and real WebGL limits. Per-profile canvas/WebGL/audio
+// noise already makes every profile hash differently.
+
+const os = require('os');
+const REAL_CORES = Math.max(2, (os.cpus() || []).length || 8);
+// Never claim more threads than the machine has (timing tests would show it).
+const CORES = [4, 6, 8, 12, 16].filter((c) => c <= REAL_CORES);
+// Chrome rounds and caps navigator.deviceMemory at 8 — 16 is impossible.
+const MEM = [4, 8, 8, 8];
 const WEBGL = [
   { v: 'Google Inc. (NVIDIA)', r: 'ANGLE (NVIDIA, NVIDIA GeForce RTX 3060 Direct3D11 vs_5_0 ps_5_0, D3D11)' },
   { v: 'Google Inc. (NVIDIA)', r: 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1660 Direct3D11 vs_5_0 ps_5_0, D3D11)' },
@@ -28,15 +38,14 @@ const pick = (rng, arr) => arr[Math.floor(rng() * arr.length) % arr.length];
 
 function generate(id) {
   const rng = rngFromId(id);
-  const [w, hgt] = pick(rng, SCREENS);
   const chrome = pick(rng, CHROME);
   const gl = pick(rng, WEBGL);
   return {
     userAgent: `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chrome} Safari/537.36`,
     uaPlatform: 'Win32',
     vendor: 'Google Inc.',
-    screen: { width: w, height: hgt },
-    hardwareConcurrency: pick(rng, CORES),
+    screen: null,
+    hardwareConcurrency: pick(rng, CORES.length ? CORES : [REAL_CORES]),
     deviceMemory: pick(rng, MEM),
     webglVendor: gl.v,
     webglRenderer: gl.r,
@@ -59,11 +68,11 @@ function effective(id, stored) {
     timezone: nz(s.timezone, ''),
     locale: nz(s.locale, ''),
     geo: s.geo || null,
-    screen: s.screen && s.screen.width ? s.screen : g.screen,
+    screen: s.screen && s.screen.width ? s.screen : null, // null = real screen
     hardwareConcurrency: nz(s.hardwareConcurrency, g.hardwareConcurrency),
     deviceMemory: nz(s.deviceMemory, g.deviceMemory),
-    webglVendor: nz(s.webglVendor, g.webglVendor),
-    webglRenderer: nz(s.webglRenderer, g.webglRenderer),
+    webglVendor: nz(s.webglVendor, ''), // '' = real GPU (+ per-profile noise)
+    webglRenderer: nz(s.webglRenderer, ''),
     canvasNoise: s.canvasNoise !== false,
   };
 }

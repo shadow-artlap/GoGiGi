@@ -15,7 +15,7 @@ function toast(title, sub, kind) {
   el.querySelector('.tt').textContent = title;
   if (sub) el.querySelector('.ts').textContent = sub;
   $('toasts').appendChild(el);
-  setTimeout(() => { el.style.opacity = '0'; el.style.transform = 'translateY(8px)'; setTimeout(() => el.remove(), 250); }, kind === 'err' ? 5200 : 3400);
+  setTimeout(() => { el.style.opacity = '0'; el.style.transform = 'translateY(8px)'; setTimeout(() => el.remove(), 250); }, kind === 'err' || kind === 'warn' ? 6000 : 3400);
 }
 
 // ---- nav ------------------------------------------------------------------
@@ -71,7 +71,7 @@ const readProxyForm = () => {
 const deviceCell = (p) => {
   const d = p.device;
   if (!d) return '<span class="muted">—</span>';
-  const top = `<span class="mono">${d.screen ? d.screen.width + '×' + d.screen.height : ''}</span> · ${d.cores || '?'}C · ${d.mem || '?'}GB`;
+  const top = `<span class="mono">${d.screen ? d.screen.width + '×' + d.screen.height : 'จอจริง'}</span> · ${d.cores || '?'}C · ${d.mem || '?'}GB`;
   const sub = [shortGpu(d.gpu), d.tz].filter(Boolean).map(esc).join(' · ');
   return `${top}${sub ? `<div class="sub">${sub}</div>` : ''}`;
 };
@@ -234,7 +234,7 @@ async function onAction(act, id, ev) {
     catch (e) { r = { ok: false, reason: String((e && e.message) || e) }; }
     finally { launching.delete(id); }
     if (!r.ok) toast('เปิดไม่สำเร็จ', r.reason, 'err');
-    else toast('เปิดโปรไฟล์แล้ว', p.name, 'ok');
+    else toast('เปิดโปรไฟล์แล้ว', r.warning ? `${p.name} — ${r.warning}` : p.name, r.warning ? 'warn' : 'ok');
     await Promise.all([loadProfiles(), refreshChromium()]);
   } else if (act === 'iptest') {
     toast('กำลังทดสอบ proxy', p.name);
@@ -328,10 +328,10 @@ function renderExtPicker(selectedIds) {
 async function renderFpPreview() {
   const g = await window.gogigi.profiles.fpPreview(modalSeed);
   if (!g) return;
-  $('fpPreview').textContent = `${g.screen.width}×${g.screen.height} · ${g.hardwareConcurrency} cores · ${g.deviceMemory} GB · ${shortGpu(g.webglRenderer)}`;
-  $('f_scrw').placeholder = String(g.screen.width); $('f_scrh').placeholder = String(g.screen.height);
+  $('fpPreview').textContent = `จอจริง · ${g.hardwareConcurrency} cores · ${g.deviceMemory} GB · ${g.webglRenderer ? shortGpu(g.webglRenderer) : 'GPU จริง'} · noise เฉพาะโปรไฟล์`;
+  $('f_scrw').placeholder = 'จอจริง'; $('f_scrh').placeholder = '(แนะนำ)';
   $('f_hc').placeholder = String(g.hardwareConcurrency); $('f_dm').placeholder = String(g.deviceMemory);
-  $('f_glv').placeholder = g.webglVendor; $('f_glr').placeholder = g.webglRenderer;
+  $('f_glv').placeholder = g.webglVendor || 'GPU จริง (แนะนำ)'; $('f_glr').placeholder = g.webglRenderer || 'GPU จริง (แนะนำ)';
   $('f_uaplat').placeholder = g.uaPlatform;
   $('f_tz').placeholder = 'ตาม proxy อัตโนมัติ'; $('f_locale').placeholder = 'ตาม proxy อัตโนมัติ';
   $('f_ua').placeholder = 'อิงเวอร์ชันเบราว์เซอร์จริง (อัตโนมัติ)';

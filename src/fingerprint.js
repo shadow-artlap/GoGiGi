@@ -1,9 +1,9 @@
 'use strict';
 
 // Fingerprint engine. Launches a profile through puppeteer-core (CDP) and
-// applies per-profile overrides: timezone, geolocation, locale, user-agent,
-// screen metrics, WebRTC policy, and canvas/WebGL noise injected before page
-// scripts run. The browser stays open and user-driven; we only inject.
+// applies per-profile overrides at the engine level (timezone, CPU, geo,
+// languages) plus prototype-level noise, before any page/iframe/worker script
+// runs. The browser stays open and user-driven; we only inject.
 
 const puppeteer = require('puppeteer-core');
 const startpage = require('./startpage');
@@ -19,80 +19,89 @@ function seedFromId(id) {
   return (h >>> 0) / 4294967295; // 0..1
 }
 
-// Build the JS injected on every new document to spoof browser fingerprints.
-// "Hardened": broad surface coverage, plus the patched functions report
-// "[native code]" so the overrides are not detectable by toString inspection.
-function buildInjection(fp, seed) {
+// Build the script injected before any page/worker code runs. Only values that
+// have no engine-level override live here (deviceMemory, GPU strings, noise).
+// Everything is defined on prototypes and shaped like native code: correct
+// name/length, no `prototype`, not constructible, and wrong-`this` calls still
+// throw "Illegal invocation" — the checks advanced anti-bot scripts run.
+function buildInjection(fp, seed, scope = 'page') {
   const cfg = {
     seed,
-    languages: fp.locale ? [fp.locale, fp.locale.split('-')[0]] : null,
-    platform: fp.uaPlatform || null,
-    vendor: fp.vendor || 'Google Inc.',
-    hardwareConcurrency: fp.hardwareConcurrency || null,
-    deviceMemory: fp.deviceMemory || null,
-    screen: fp.screen && fp.screen.width ? fp.screen : null,
+    worker: scope === 'worker',
+    // Chrome only ever reports 0.25/0.5/1/2/4/8 — snap anything else.
+    deviceMemory: fp.deviceMemory ? [0.25, 0.5, 1, 2, 4, 8].filter((v) => v <= Number(fp.deviceMemory)).pop() || 0.25 : null,
+    hardwareConcurrency: fp.hardwareConcurrency ? Number(fp.hardwareConcurrency) : null,
     webglVendor: fp.webglVendor || null,
     webglRenderer: fp.webglRenderer || null,
     canvasNoise: fp.canvasNoise !== false,
     webrtcDisabled: fp.webrtc === 'disabled',
   };
   return `(() => {
+  'use strict';
   const C = ${JSON.stringify(cfg)};
-  // ---- make patched functions report [native code] ----
+  const G = self;
+  // Run once per realm. A blank popup/iframe window is REUSED when it navigates
+  // same-origin, so the script can arrive twice; double patching would double
+  // the noise. The guard answers only to a registry symbol derived from the
+  // seed — natively toString.call(symbol) throws, so pages can't observe it.
+  const KEY = Symbol.for('⁣' + C.seed);
+  try { if (Function.prototype.toString.call(KEY) === 'gg') return; } catch (e) {}
+  // ---- native-looking patches ----
   const _toString = Function.prototype.toString;
   const native = new WeakMap();
-  const tag = (fn, name) => { try { native.set(fn, name || (fn && fn.name) || ''); } catch(e){} return fn; };
-  const patchedToString = function toString() {
+  const tag = (fn, name) => { try { native.set(fn, name); } catch (e) {} return fn; };
+  const patchedToString = ({ toString() {
+    if (this === KEY) return 'gg';
     if (native.has(this)) return 'function ' + native.get(this) + '() { [native code] }';
     return _toString.call(this);
-  };
+  } }).toString;
   tag(patchedToString, 'toString');
-  try { Function.prototype.toString = patchedToString; } catch(e){}
+  try { Function.prototype.toString = patchedToString; } catch (e) {}
 
-  const defGet = (obj, prop, val) => {
-    try {
-      const g = function () { return val; }; tag(g, 'get ' + prop);
-      Object.defineProperty(obj, prop, { get: g, configurable: true, enumerable: true });
-    } catch(e){}
-  };
+  // Method replacement: method-shorthand (no prototype, not a constructor),
+  // original length/name kept.
   const patch = (obj, name, make) => {
     try {
       const orig = obj && obj[name];
       if (typeof orig !== 'function') return;
-      const fn = make(orig); tag(fn, name);
+      const impl = make(orig);
+      const fn = ({ [name](...a) { return impl.apply(this, a); } })[name];
+      Object.defineProperty(fn, 'length', { value: orig.length });
+      tag(fn, name);
       obj[name] = fn;
-    } catch(e){}
+    } catch (e) {}
+  };
+  // Getter replacement on a prototype; calls the original getter first so a
+  // wrong receiver still throws exactly like the native one.
+  const defProto = (proto, prop, val) => {
+    try {
+      const d = Object.getOwnPropertyDescriptor(proto, prop);
+      const holder = { get [prop]() { if (d && d.get) d.get.call(this); return val; } };
+      const g = Object.getOwnPropertyDescriptor(holder, prop).get;
+      tag(g, 'get ' + prop);
+      Object.defineProperty(proto, prop, { get: g, set: undefined, configurable: d ? d.configurable : true, enumerable: d ? d.enumerable : true });
+    } catch (e) {}
   };
 
-  // ---- navigator ----
-  try { defGet(Navigator.prototype, 'webdriver', false); } catch(e){ defGet(navigator, 'webdriver', false); }
-  if (C.languages) { defGet(navigator, 'languages', Object.freeze(C.languages.slice())); defGet(navigator, 'language', C.languages[0]); }
-  if (C.platform) defGet(navigator, 'platform', C.platform);
-  if (C.vendor) defGet(navigator, 'vendor', C.vendor);
-  if (C.hardwareConcurrency) defGet(navigator, 'hardwareConcurrency', C.hardwareConcurrency);
-  if (C.deviceMemory) defGet(navigator, 'deviceMemory', C.deviceMemory);
-
-  // ---- screen ----
-  if (C.screen) {
-    defGet(screen, 'width', C.screen.width); defGet(screen, 'height', C.screen.height);
-    defGet(screen, 'availWidth', C.screen.width); defGet(screen, 'availHeight', Math.max(0, C.screen.height - 48));
-    defGet(screen, 'colorDepth', 24); defGet(screen, 'pixelDepth', 24);
+  // ---- device values without an engine override ----
+  if (C.worker) {
+    if (G.WorkerNavigator) {
+      if (C.deviceMemory) defProto(WorkerNavigator.prototype, 'deviceMemory', C.deviceMemory);
+      // the engine override doesn't reach workers
+      if (C.hardwareConcurrency) defProto(WorkerNavigator.prototype, 'hardwareConcurrency', C.hardwareConcurrency);
+    }
+  } else {
+    if (C.deviceMemory && G.Navigator) defProto(Navigator.prototype, 'deviceMemory', C.deviceMemory);
+    // Notification permission consistency (classic automation tell)
+    if (G.Permissions) patch(Permissions.prototype, 'query', (o) => function (p) {
+      if (this instanceof Permissions && p && p.name === 'notifications' && G.Notification) {
+        return Promise.resolve(Object.setPrototypeOf({ state: Notification.permission === 'default' ? 'prompt' : Notification.permission, onchange: null }, PermissionStatus.prototype));
+      }
+      return o.call(this, p);
+    });
   }
 
-  // ---- permissions / Notification consistency (classic headless tell) ----
-  try {
-    if (navigator.permissions && navigator.permissions.query) {
-      patch(navigator.permissions, 'query', (orig) => function (p) {
-        if (p && p.name === 'notifications') return Promise.resolve({ state: Notification.permission, onchange: null });
-        return orig.call(this, p);
-      });
-    }
-  } catch(e){}
-
   // ---- deterministic per-profile noise ----
-  // Noise is a pure function of (profile seed, position): repeated reads in the
-  // same profile return identical results (detectors read twice and compare),
-  // while different profiles produce different hashes.
   const SEEDI = (Math.floor(C.seed * 4294967295) >>> 0) || 0x9e3779b9;
   const mix = (a) => { a = Math.imul(a ^ (a >>> 16), 0x7feb352d); a = Math.imul(a ^ (a >>> 15), 0x846ca68b); return (a ^ (a >>> 16)) >>> 0; };
   const hk = (a, b) => mix(SEEDI ^ mix((a | 0) ^ Math.imul(b | 0, 0x9e3779b1)));
@@ -107,101 +116,132 @@ function buildInjection(fp, seed) {
   };
 
   if (C.canvasNoise) {
-    const _get = CanvasRenderingContext2D.prototype.getImageData;
-    const _put = CanvasRenderingContext2D.prototype.putImageData;
-    const _toDataURL = HTMLCanvasElement.prototype.toDataURL;
-    const _toBlob = HTMLCanvasElement.prototype.toBlob;
-    // Export from a noised copy; the page's own canvas is never modified.
-    const noisedCopy = (src) => {
+    // 2D contexts (DOM + Offscreen): noised reads, page canvas untouched.
+    const ctxProtos = [];
+    if (G.CanvasRenderingContext2D) ctxProtos.push(CanvasRenderingContext2D.prototype);
+    if (G.OffscreenCanvasRenderingContext2D) ctxProtos.push(OffscreenCanvasRenderingContext2D.prototype);
+    const origGet = new Map(), origPut = new Map();
+    for (const P of ctxProtos) { origGet.set(P, P.getImageData); origPut.set(P, P.putImageData); }
+    const noisedCopy = (src, make2d) => {
       const w = src.width, h = src.height;
       if (!w || !h || w * h > 16000000) return null;
-      const t = document.createElement('canvas'); t.width = w; t.height = h;
-      const tc = t.getContext('2d'); tc.drawImage(src, 0, 0);
-      const img = _get.call(tc, 0, 0, w, h); noisePixels(img.data, 0, 0, w); _put.call(tc, img, 0, 0);
+      const t = make2d(w, h); const tc = t.getContext('2d'); tc.drawImage(src, 0, 0);
+      const P = Object.getPrototypeOf(tc);
+      const img = origGet.get(P).call(tc, 0, 0, w, h); noisePixels(img.data, 0, 0, w); origPut.get(P).call(tc, img, 0, 0);
       return t;
     };
-    patch(HTMLCanvasElement.prototype, 'toDataURL', (o) => function () {
-      try { const c = noisedCopy(this); if (c) return _toDataURL.apply(c, arguments); } catch (e) {}
-      return o.apply(this, arguments);
-    });
-    patch(HTMLCanvasElement.prototype, 'toBlob', (o) => function () {
-      try { const c = noisedCopy(this); if (c) return _toBlob.apply(c, arguments); } catch (e) {}
-      return o.apply(this, arguments);
-    });
-    patch(CanvasRenderingContext2D.prototype, 'getImageData', (o) => function (sx, sy) {
-      const d = o.apply(this, arguments);
-      try { noisePixels(d.data, sx | 0, sy | 0, d.width); } catch (e) {}
-      return d;
-    });
-    const rp = (proto) => patch(proto, 'readPixels', (o) => function (x, y, w, h, format, type, pixels) {
-      const r = o.apply(this, arguments);
-      try { if (pixels instanceof Uint8Array && format === 0x1908 && type === 0x1401) noisePixels(pixels, x | 0, y | 0, w | 0); } catch (e) {}
-      return r;
-    });
-    try { rp(WebGLRenderingContext.prototype); } catch (e) {}
-    try { rp(WebGL2RenderingContext.prototype); } catch (e) {}
-
+    if (G.HTMLCanvasElement) {
+      const mk = (w, h) => { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; };
+      const _toDataURL = HTMLCanvasElement.prototype.toDataURL, _toBlob = HTMLCanvasElement.prototype.toBlob;
+      patch(HTMLCanvasElement.prototype, 'toDataURL', (o) => function () {
+        try { const c = noisedCopy(this, mk); if (c) return _toDataURL.apply(c, arguments); } catch (e) {}
+        return o.apply(this, arguments);
+      });
+      patch(HTMLCanvasElement.prototype, 'toBlob', (o) => function () {
+        try { const c = noisedCopy(this, mk); if (c) return _toBlob.apply(c, arguments); } catch (e) {}
+        return o.apply(this, arguments);
+      });
+    }
+    if (G.OffscreenCanvas) {
+      const mk = (w, h) => new OffscreenCanvas(w, h);
+      const _convert = OffscreenCanvas.prototype.convertToBlob;
+      patch(OffscreenCanvas.prototype, 'convertToBlob', (o) => function () {
+        try { const c = noisedCopy(this, mk); if (c) return _convert.apply(c, arguments); } catch (e) {}
+        return o.apply(this, arguments);
+      });
+    }
+    for (const P of ctxProtos) {
+      patch(P, 'getImageData', (o) => function (sx, sy) {
+        const d = o.apply(this, arguments);
+        try { noisePixels(d.data, sx | 0, sy | 0, d.width); } catch (e) {}
+        return d;
+      });
+    }
+    // WebGL pixel reads
+    for (const k of ['WebGLRenderingContext', 'WebGL2RenderingContext']) {
+      if (!G[k]) continue;
+      patch(G[k].prototype, 'readPixels', (o) => function (x, y, w, h, format, type, pixels) {
+        const r = o.apply(this, arguments);
+        try { if (pixels instanceof Uint8Array && format === 0x1908 && type === 0x1401) noisePixels(pixels, x | 0, y | 0, w | 0); } catch (e) {}
+        return r;
+      });
+    }
     // Text metrics: tiny per-profile width offset (< 0.01px) on genuine objects.
     try {
-      const TM = TextMetrics.prototype;
-      const wd = Object.getOwnPropertyDescriptor(TM, 'width');
-      const deltas = new WeakMap();
-      patch(CanvasRenderingContext2D.prototype, 'measureText', (o) => function (text) {
-        const m = o.apply(this, arguments);
-        try {
-          let th = 0; const st = String(text);
-          for (let i = 0; i < st.length; i++) th = Math.imul(th ^ st.charCodeAt(i), 16777619);
-          deltas.set(m, ((hk(th, 977) % 1000) / 1000 - 0.5) * 0.02);
-        } catch (e) {}
-        return m;
-      });
-      if (wd && wd.get) {
-        const g = function width() { const v = wd.get.call(this); const dl = deltas.get(this); return dl ? v + dl : v; };
-        tag(g, 'get width');
-        Object.defineProperty(TM, 'width', { get: g, configurable: wd.configurable, enumerable: wd.enumerable });
+      if (G.TextMetrics) {
+        const TM = TextMetrics.prototype;
+        const wd = Object.getOwnPropertyDescriptor(TM, 'width');
+        const deltas = new WeakMap();
+        for (const P of ctxProtos) {
+          patch(P, 'measureText', (o) => function (text) {
+            const m = o.apply(this, arguments);
+            try {
+              let th = 0; const st = String(text);
+              for (let i = 0; i < st.length; i++) th = Math.imul(th ^ st.charCodeAt(i), 16777619);
+              deltas.set(m, ((hk(th, 977) % 1000) / 1000 - 0.5) * 0.02);
+            } catch (e) {}
+            return m;
+          });
+        }
+        if (wd && wd.get) {
+          const holder = { get width() { const v = wd.get.call(this); const dl = deltas.get(this); return dl ? v + dl : v; } };
+          const g = Object.getOwnPropertyDescriptor(holder, 'width').get;
+          tag(g, 'get width');
+          Object.defineProperty(TM, 'width', { get: g, set: undefined, configurable: wd.configurable, enumerable: wd.enumerable });
+        }
       }
     } catch (e) {}
-
-    // Audio: deterministic, applied once per buffer channel.
+    // Audio: deterministic, once per buffer channel.
     try {
-      const _gcd = AudioBuffer.prototype.getChannelData;
-      const done = new WeakMap();
-      const noiseCh = (buf, ch) => {
-        let set = done.get(buf); if (!set) { set = new Set(); done.set(buf, set); }
-        if (set.has(ch)) return; set.add(ch);
-        const a = _gcd.call(buf, ch);
-        for (let i = 0; i < a.length; i++) { const h = hk(i, ch + 101); if (h % 100 === 0) a[i] += ((h >>> 8) % 1000 / 1000 - 0.5) * 1e-6; }
-      };
-      patch(AudioBuffer.prototype, 'getChannelData', (o) => function (ch) { try { noiseCh(this, ch); } catch (e) {} return o.apply(this, arguments); });
-      patch(AudioBuffer.prototype, 'copyFromChannel', (o) => function (dest, ch) { try { noiseCh(this, ch); } catch (e) {} return o.apply(this, arguments); });
-      if (window.AnalyserNode) {
+      if (G.AudioBuffer) {
+        const _gcd = AudioBuffer.prototype.getChannelData;
+        const done = new WeakMap();
+        const noiseCh = (buf, ch) => {
+          let set = done.get(buf); if (!set) { set = new Set(); done.set(buf, set); }
+          if (set.has(ch)) return; set.add(ch);
+          const a = _gcd.call(buf, ch);
+          for (let i = 0; i < a.length; i++) { const h = hk(i, ch + 101); if (h % 100 === 0) a[i] += ((h >>> 8) % 1000 / 1000 - 0.5) * 1e-6; }
+        };
+        patch(AudioBuffer.prototype, 'getChannelData', (o) => function (ch) { if (this instanceof AudioBuffer) { try { noiseCh(this, ch); } catch (e) {} } return o.apply(this, arguments); });
+        patch(AudioBuffer.prototype, 'copyFromChannel', (o) => function (dest, ch) { if (this instanceof AudioBuffer) { try { noiseCh(this, ch); } catch (e) {} } return o.apply(this, arguments); });
+      }
+      if (G.AnalyserNode) {
         patch(AnalyserNode.prototype, 'getFloatFrequencyData', (o) => function (arr) {
-          o.apply(this, arguments);
+          const r = o.apply(this, arguments);
           try { for (let i = 0; i < arr.length; i++) { const h = hk(i, 7); if (h % 10 === 0) arr[i] += ((h >>> 8) % 1000 / 1000 - 0.5) * 1e-3; } } catch (e) {}
+          return r;
         });
       }
     } catch (e) {}
   }
 
-  // ---- WebGL vendor / renderer ----
+  // ---- WebGL vendor / renderer (pages and workers) ----
   if (C.webglVendor || C.webglRenderer) {
-    const gl = (proto) => patch(proto, 'getParameter', (o) => function (p) {
-      if (p === 37445 && C.webglVendor) return C.webglVendor;    // UNMASKED_VENDOR_WEBGL
-      if (p === 37446 && C.webglRenderer) return C.webglRenderer; // UNMASKED_RENDERER_WEBGL
-      return o.call(this, p);
-    });
-    try { gl(WebGLRenderingContext.prototype); } catch(e){}
-    try { gl(WebGL2RenderingContext.prototype); } catch(e){}
+    for (const k of ['WebGLRenderingContext', 'WebGL2RenderingContext']) {
+      if (!G[k]) continue;
+      patch(G[k].prototype, 'getParameter', (o) => function (p) {
+        const r = o.apply(this, arguments); // validates receiver
+        if (p === 37445 && C.webglVendor) return C.webglVendor;
+        if (p === 37446 && C.webglRenderer) return C.webglRenderer;
+        return r;
+      });
+    }
   }
 
-  // ---- WebRTC disable ----
-  if (C.webrtcDisabled) {
-    try { defGet(window, 'RTCPeerConnection', undefined); defGet(window, 'webkitRTCPeerConnection', undefined); } catch(e){}
+  // ---- WebRTC disable (opt-in) ----
+  if (C.webrtcDisabled && !C.worker) {
+    for (const k of ['RTCPeerConnection', 'webkitRTCPeerConnection', 'RTCDataChannel']) {
+      try { Object.defineProperty(G, k, { value: undefined, writable: true, configurable: true }); } catch (e) {}
+    }
   }
-  })();`;
+})();`;
 }
 
 const ProxyChain = require('proxy-chain');
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const { CDPSessionEvent } = require('puppeteer-core');
 const launchingIds = new Set();
 
 function upstreamUrl(p) {
@@ -209,8 +249,8 @@ function upstreamUrl(p) {
   return `${p.scheme || 'http'}://${auth}${p.host}:${p.port}`;
 }
 
-// UA + Client Hints derived from the REAL engine version, so navigator.userAgent,
-// navigator.userAgentData and Sec-CH-UA headers never contradict each other.
+// UA + Client Hints derived from the REAL engine version (used only for
+// headless, where the native UA says "HeadlessChrome").
 function uaFor(major) {
   return `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`;
 }
@@ -229,17 +269,59 @@ function uaMetadataFor(major, full) {
   };
 }
 
+// "th-TH" -> "th-TH,th,en-US,en" — what a real user's language list looks like.
+function langList(locale) {
+  if (!locale) return '';
+  const out = [locale];
+  const base = locale.split('-')[0];
+  if (base && base !== locale) out.push(base);
+  if (base !== 'en') out.push('en-US', 'en');
+  return [...new Set(out)].join(',');
+}
+
+// Languages are set the way a person sets them (Chrome preferences), so
+// navigator.languages, Accept-Language, workers and iframes all agree natively.
+function writePrefs(userDataDir, fp) {
+  try {
+    const dir = path.join(userDataDir, 'Default');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, 'Preferences');
+    let prefs = {};
+    try { prefs = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { /* first run */ }
+    const langs = langList(fp.locale);
+    if (langs) { prefs.intl = prefs.intl || {}; prefs.intl.accept_languages = langs; prefs.intl.selected_languages = langs; }
+    // A crash/kill must not show the "Restore pages?" bubble next launch.
+    prefs.profile = prefs.profile || {};
+    prefs.profile.exit_type = 'Normal'; prefs.profile.exited_cleanly = true;
+    fs.writeFileSync(file, JSON.stringify(prefs));
+  } catch (e) { /* non-fatal */ }
+}
+
+function serveStartPage(html) {
+  return new Promise((resolve) => {
+    const srv = http.createServer((q, s) => {
+      s.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
+      s.end(html);
+    });
+    srv.on('error', () => resolve(null));
+    srv.listen(0, '127.0.0.1', () => resolve(srv));
+  });
+}
+
 async function launch(opts) {
   const { id, exePath, userDataDir, extraArgs = [], proxy, fp = {}, tabs = [], meta = {}, headless = false, seedKey } = opts;
   if (running.has(id) || launchingIds.has(id)) return { ok: false, reason: 'already-running' };
   launchingIds.add(id);
-  let localProxy = null;
+  let localProxy = null, startSrv = null;
   try {
+    // A real Chrome command line: none of puppeteer's automation defaults
+    // (--enable-automation, --disable-popup-blocking, throttling off, ...).
     const args = [
+      `--user-data-dir=${userDataDir}`,
       '--no-first-run', '--no-default-browser-check',
       '--disable-blink-features=AutomationControlled',
-      ...extraArgs,
     ];
+    if (headless) args.push('--headless=new', '--window-size=1920,1080');
     if (proxy && proxy.host && proxy.port) {
       // Chrome can't authenticate SOCKS proxies, and per-page HTTP auth races on
       // new tabs (first request can 407). A local no-auth forwarder fixes both.
@@ -252,16 +334,19 @@ async function launch(opts) {
       }
     }
     if (fp.webrtc === 'disabled' || fp.webrtc === 'proxy-udp') {
-      args.push('--force-webrtc-ip-handling-policy=disable_non_proxied_udp');
+      args.push('--force-webrtc-ip-handling-policy=disable_non_proxied_udp', '--webrtc-ip-handling-policy=disable_non_proxied_udp');
     }
     if (fp.locale) args.push(`--lang=${fp.locale}`);
-    if (fp.screen && fp.screen.width) args.push(`--window-size=${fp.screen.width},${fp.screen.height}`);
+    const explicitScreen = fp.screen && fp.screen.width && fp.screen.height ? { w: Number(fp.screen.width), h: Number(fp.screen.height) } : null;
+    if (explicitScreen && !headless) args.push(`--window-size=${Math.min(explicitScreen.w, 1600)},${Math.min(explicitScreen.h - 80, 900)}`);
+    args.push(...extraArgs, 'about:blank');
+    writePrefs(userDataDir, fp);
 
     let browser;
     try {
       browser = await puppeteer.launch({
-        executablePath: exePath, userDataDir, headless, defaultViewport: null,
-        ignoreDefaultArgs: ['--enable-automation'], args,
+        executablePath: exePath, headless: false, defaultViewport: null, pipe: true,
+        ignoreDefaultArgs: true, args, timeout: 90000, protocolTimeout: 90000,
       });
     } catch (e) {
       if (localProxy) await ProxyChain.closeAnonymizedProxy(localProxy, true).catch(() => {});
@@ -270,80 +355,127 @@ async function launch(opts) {
       if (/already running|in use|lock/i.test(msg)) return { ok: false, reason: 'โปรไฟล์นี้ถูกเปิดค้างอยู่ — ปิดหน้าต่างเบราว์เซอร์เดิมก่อน' };
       return { ok: false, reason: msg };
     }
-    running.set(id, { browser, localProxy });
+    running.set(id, { browser, localProxy, startSrv: null });
 
-    // UA consistent with the real engine unless the user set their own.
+    // UA: the native one is already genuine and matches its Client Hints.
+    // Override only when the user typed a custom UA, or in headless mode.
     let ua = fp.userAgent || '';
     let uaMeta;
-    if (!ua) {
-      try {
-        const m = (await browser.version()).match(/(\d+)\.(\d+)\.(\d+)\.(\d+)/);
-        if (m) { ua = uaFor(m[1]); uaMeta = uaMetadataFor(m[1], m[0]); }
-      } catch (e) { /* keep engine default */ }
+    let realFull = '';
+    try { const m = (await browser.version()).match(/(\d+)\.(\d+)\.(\d+)\.(\d+)/); if (m) realFull = m[0]; } catch (e) {}
+    if (!ua && headless && realFull) ua = uaFor(realFull.split('.')[0]);
+    if (ua) {
+      const cm = ua.match(/Chrome\/(\d+)/);
+      if (cm && /Windows/.test(ua)) uaMeta = uaMetadataFor(cm[1], cm[1] === realFull.split('.')[0] ? realFull : `${cm[1]}.0.0.0`);
     }
     const fpEff = { ...fp, userAgent: ua };
-    const injection = buildInjection(fpEff, seedFromId(seedKey || id));
+    const seed = seedFromId(seedKey || id);
+    const pageScript = buildInjection(fpEff, seed, 'page');
+    const workerScript = buildInjection(fpEff, seed, 'worker');
+    const hc = Number(fp.hardwareConcurrency) || 0;
+    const dm = Number(fp.deviceMemory) || 0;
+    const geo = fp.geo && fp.geo.lat != null && fp.geo.lon != null ? { latitude: Number(fp.geo.lat), longitude: Number(fp.geo.lon), accuracy: 30 + Math.round(seed * 40) } : null;
+    const langs = langList(fp.locale);
 
-    // One shared promise per page, so callers racing on the same page all wait
-    // for the injection to be registered before navigating.
-    const applying = new WeakMap();
-    const doApply = async (page) => {
-      try {
-        if (ua) { try { await page.setUserAgent(ua, uaMeta); } catch (e) { try { await page.setUserAgent(ua); } catch (_) {} } }
-        if (fp.timezone) { try { await page.emulateTimezone(fp.timezone); } catch (e) {} }
-        if (fp.geo && fp.geo.lat != null && fp.geo.lon != null) {
-          try { await page.setGeolocation({ latitude: Number(fp.geo.lat), longitude: Number(fp.geo.lon), accuracy: 50 }); } catch (e) {}
+    // Engine-level overrides, sent while the new target is still paused
+    // (puppeteer emits Ready synchronously before Runtime.runIfWaitingForDebugger),
+    // so the first line of any page, iframe or worker already sees them.
+    const applyTarget = (session) => {
+      if (!session || session.__gg) return session && session.__gg;
+      let type = '';
+      try { type = session._target()._getTargetInfo().type; } catch (e) { return null; }
+      const send = (m, p) => session.send(m, p).catch(() => {});
+      const all = [];
+      if (type === 'page' || type === 'iframe') {
+        all.push(send('Page.enable'));
+        if (ua) all.push(send('Emulation.setUserAgentOverride', { userAgent: ua, acceptLanguage: langs || undefined, platform: 'Win32', userAgentMetadata: uaMeta }));
+        if (fp.timezone) all.push(send('Emulation.setTimezoneOverride', { timezoneId: fp.timezone }));
+        if (hc) all.push(send('Emulation.setHardwareConcurrencyOverride', { hardwareConcurrency: hc }));
+        if (geo) all.push(send('Emulation.setGeolocationOverride', geo));
+        if (explicitScreen && type === 'page') {
+          all.push(send('Emulation.setDeviceMetricsOverride', { width: 0, height: 0, deviceScaleFactor: 0, mobile: false, screenWidth: explicitScreen.w, screenHeight: explicitScreen.h }));
         }
-        await page.evaluateOnNewDocument(injection);
-      } catch (e) { /* ignore */ }
+        all.push(send('Page.addScriptToEvaluateOnNewDocument', { source: pageScript, runImmediately: true }));
+        // Renderer-opened tabs/popups (have an opener) start paused correctly;
+        // never reload those — it would break sign-in popups and POST results.
+        if (type === 'page' && !session._target()._getTargetInfo().openerId) watchMiss(session);
+      } else if (type === 'worker' || type === 'shared_worker') {
+        all.push(send('Runtime.evaluate', { expression: workerScript }));
+        if (ua) all.push(send('Network.setUserAgentOverride', { userAgent: ua, acceptLanguage: langs || undefined, platform: 'Win32', userAgentMetadata: uaMeta }));
+      } else {
+        return null;
+      }
+      session.__gg = Promise.all(all);
+      if (type === 'page') session.__gg.then(() => session.__ggCheck && session.__ggCheck());
+      return session.__gg;
     };
-    const applyPage = (page) => {
-      if (!applying.has(page)) applying.set(page, doApply(page));
-      return applying.get(page);
+    // Safety net for tabs opened straight to a URL (Target.createTarget with a
+    // url, some extensions): Chrome can start those before our overrides land.
+    // A correctly paused tab is still on its initial blank document when the
+    // overrides finish; one that already shows a real page raced — reload it once.
+    const watchMiss = (session) => {
+      session.__ggCheck = async () => {
+        try {
+          const r = await session.send('Runtime.evaluate', { expression: 'location.href', returnByValue: true });
+          const u = String(r.result.value || '');
+          if (!/^https?:/i.test(u) || (startOrigin && u.startsWith(startOrigin))) return;
+          await session.send('Page.reload', {});
+        } catch (e) { /* navigating already (=> after our overrides) or closed */ }
+      };
     };
-    // Did this document miss the injection? (compares generated values)
-    const missed = async (page) => {
-      try {
-        return await page.evaluate((hc, sw) => (!!hc && navigator.hardwareConcurrency !== hc) || (!!sw && screen.width !== sw),
-          fp.hardwareConcurrency || 0, (fp.screen && fp.screen.width) || 0);
-      } catch (e) { return false; }
-    };
+    let startOrigin = '';
 
-    browser.on('targetcreated', async (t) => {
-      try {
-        const p = await t.page(); if (!p) return;
-        await applyPage(p);
-        // A tab/popup the user opened can start loading before our script is
-        // registered. If its current document missed the injection, reload once.
-        if (/^https?:/i.test(p.url()) && await missed(p)) await p.reload().catch(() => {});
-      } catch (e) { /* ignore */ }
-    });
-    for (const p of await browser.pages()) await applyPage(p);
-
-    if (fp.geo && fp.geo.lat != null) {
-      try { await browser.defaultBrowserContext().overridePermissions((tabs && tabs[0]) || 'https://www.google.com', ['geolocation']); } catch (e) {}
+    const rootSession = await browser.target().createCDPSession();
+    const conn = rootSession.connection();
+    // Ready is emitted on the PARENT session (or the connection for top-level
+    // targets); the connection announces every new session, so this covers all.
+    const onReady = (s) => { applyTarget(s); };
+    conn.on(CDPSessionEvent.Ready, onReady);
+    conn.on(CDPSessionEvent.SessionAttached, (s) => s.on(CDPSessionEvent.Ready, onReady));
+    // Targets that existed before the hook (the initial blank tab).
+    for (const t of browser.targets()) {
+      try { const s = t._session && t._session(); if (s) { s.on(CDPSessionEvent.Ready, onReady); applyTarget(s); } } catch (e) {}
     }
 
-    // First tab: GoGiGi start page; configured tabs open after it.
-    const pages = await browser.pages();
-    const first = pages[0] || await browser.newPage();
-    await applyPage(first);
-    await first.setContent(startpage.buildHtml(meta, fpEff), { waitUntil: 'domcontentloaded' }).catch(() => {});
+    const pageSession = async (targetId) => {
+      const t = await browser.waitForTarget((x) => x._targetId === targetId, { timeout: 15000 });
+      const s = t._session();
+      await applyTarget(s);
+      return s;
+    };
+    const firstTarget = browser.targets().find((t) => t.type() === 'page');
+
+    // First tab: GoGiGi start page (served on loopback — a secure context, so
+    // copy-to-clipboard works). Configured tabs open blank, get the overrides,
+    // then navigate — no race with the first script.
+    startSrv = await serveStartPage(startpage.buildHtml(meta, fpEff));
+    running.get(id).startSrv = startSrv;
+    const startUrl = startSrv ? `http://127.0.0.1:${startSrv.address().port}/` : 'about:blank';
+    if (startSrv) startOrigin = startUrl;
+    try {
+      if (firstTarget) { const s = await pageSession(firstTarget._targetId); await s.send('Page.navigate', { url: startUrl }); }
+    } catch (e) { /* ignore */ }
     for (const u of (tabs || [])) {
-      const pg = await browser.newPage();
-      await applyPage(pg); // register the injection BEFORE navigating
-      pg.goto(u, { waitUntil: 'domcontentloaded', timeout: 0 }).catch(() => {});
+      try {
+        const { targetId } = await rootSession.send('Target.createTarget', { url: 'about:blank' });
+        const s = await pageSession(targetId);
+        s.send('Page.navigate', { url: u }).catch(() => {});
+      } catch (e) { /* ignore */ }
     }
 
     browser.on('disconnected', () => {
       const r = running.get(id);
       running.delete(id);
       if (r && r.localProxy) ProxyChain.closeAnonymizedProxy(r.localProxy, true).catch(() => {});
+      if (r && r.startSrv) try { r.startSrv.close(); } catch (e) {}
       if (onChange) onChange();
     });
     return { ok: true };
   } catch (e) {
-    if (localProxy && !running.has(id)) ProxyChain.closeAnonymizedProxy(localProxy, true).catch(() => {});
+    if (!running.has(id)) {
+      if (localProxy) ProxyChain.closeAnonymizedProxy(localProxy, true).catch(() => {});
+      if (startSrv) try { startSrv.close(); } catch (er) {}
+    }
     return { ok: false, reason: String((e && e.message) || e) };
   } finally {
     launchingIds.delete(id);
@@ -356,6 +488,7 @@ async function stop(id) {
   try { await r.browser.close(); } catch (e) { /* ignore */ }
   running.delete(id);
   if (r.localProxy) await ProxyChain.closeAnonymizedProxy(r.localProxy, true).catch(() => {});
+  if (r.startSrv) try { r.startSrv.close(); } catch (e) {}
   return { ok: true };
 }
 async function stopAll() { await Promise.all([...running.keys()].map((id) => stop(id))); }

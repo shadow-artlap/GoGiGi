@@ -210,7 +210,7 @@ input[type=checkbox]{accent-color:var(--accent);width:15px;height:15px}
   padding:12px 15px;box-shadow:var(--shadow);font-size:13px;display:flex;gap:10px;align-items:flex-start;
   animation:toastin .22s cubic-bezier(.2,.8,.2,1)}
 .toast .bar-i{width:3px;align-self:stretch;border-radius:3px;background:var(--accent);flex:none}
-.toast.ok .bar-i{background:var(--live)} .toast.err .bar-i{background:var(--danger)}
+.toast.ok .bar-i{background:var(--live)} .toast.err .bar-i{background:var(--danger)} .toast.warn .bar-i{background:var(--warn)}
 .toast .tx{min-width:0}
 .toast .tt{font-weight:600;margin-bottom:2px}
 .toast .ts{color:var(--dim);font-size:12.5px;word-break:break-word}
