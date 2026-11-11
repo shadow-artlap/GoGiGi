@@ -34,6 +34,7 @@ function buildInjection(fp, seed, scope = 'page') {
     webglVendor: fp.webglVendor || null,
     webglRenderer: fp.webglRenderer || null,
     canvasNoise: fp.canvasNoise !== false,
+    fontMask: fp.canvasNoise !== false && fp.fontMask !== false,
     webrtcDisabled: fp.webrtc === 'disabled',
   };
   return `(() => {
@@ -215,6 +216,95 @@ function buildInjection(fp, seed, scope = 'page') {
     } catch (e) {}
   }
 
+  // ---- per-profile font list ----
+  // Each profile "has" a different subset of the optional fonts (Office /
+  // app-installed families — their absence is normal on real PCs). A hidden
+  // family is swapped for a name that exists nowhere, so the engine behaves
+  // exactly as if it were not installed (width probes, canvas, fonts.check);
+  // getters map the swap back, so the page reads what it wrote.
+  if (C.fontMask) {
+    const OFFICE = ['agency fb','algerian','arial narrow','arial rounded mt bold','baskerville old face','bauhaus 93','bell mt','berlin sans fb','berlin sans fb demi','bernard mt condensed','blackadder itc','bodoni mt','bodoni mt black','bodoni mt condensed','book antiqua','bookman old style','bradley hand itc','britannic bold','broadway','brush script mt','californian fb','calisto mt','castellar','centaur','century','century gothic','century schoolbook','chiller','colonna mt','cooper black','copperplate gothic bold','copperplate gothic light','curlz mt','edwardian script itc','elephant','engravers mt','eras bold itc','eras demi itc','eras light itc','eras medium itc','felix titling','footlight mt light','forte','franklin gothic book','franklin gothic demi','franklin gothic demi cond','franklin gothic heavy','franklin gothic medium cond','freestyle script','french script mt','garamond','gigi','gill sans mt','gill sans mt condensed','gill sans ultra bold','gloucester mt extra condensed','goudy old style','goudy stout','haettenschweiler','harlow solid italic','harrington','high tower text','imprint mt shadow','informal roman','jokerman','juice itc','kristen itc','kunstler script','lucida bright','lucida calligraphy','lucida fax','lucida handwriting','lucida sans','lucida sans typewriter','magneto','maiandra gd','matura mt script capitals','mistral','modern no. 20','monotype corsiva','ms outlook','ms reference sans serif','ms reference specialty','niagara engraved','niagara solid','ocr a extended','old english text mt','onyx','palace script mt','papyrus','parchment','perpetua','perpetua titling mt','playbill','poor richard','pristina','rage italic','ravie','rockwell','rockwell condensed','rockwell extra bold','script mt bold','showcard gothic','snap itc','stencil','tempus sans itc','tw cen mt','tw cen mt condensed','viner hand itc','vivaldi','vladimir script','wide latin','wingdings 2','wingdings 3','bookshelf symbol 7','calibri light','dubai','dubai light','dubai medium','leelawadee','microsoft uighur','sakkal majalla','simplified arabic','traditional arabic','angsana new','angsanaupc','browallia new','browalliaupc','cordia new','cordiaupc','dilleniaupc','eucrosiaupc','freesiaupc','irisupc','jasmineupc','kodchiangupc','lilyupc','adobe garamond pro','minion pro','myriad pro','segoe fluent icons','segoe ui variable','cascadia code','cascadia mono','sitka','nirmala ui semilight'];
+    const noOffice = hk(4242, 1) % 100 < 28; // a machine without Office
+    const hidden = new Map(); // lower-case name -> token
+    OFFICE.forEach((n, i) => {
+      const h = hk(i, 313);
+      if ((noOffice && i < 120) || h % 100 < 32) hidden.set(n, 'x' + (SEEDI >>> 8).toString(36) + 'q' + i.toString(36));
+    });
+    const byToken = new Map([...hidden].map(([n, t]) => [t, n]));
+    const spell = new Map(); // token -> spelling the page used last
+    const unq = (x) => x.trim().replace(/^(['"])(.*)\\1$/, '$2').trim();
+    const GENERIC = /^(serif|sans-serif|monospace|cursive|fantasy|system-ui|ui-\\w+|math|emoji|fangsong|inherit|initial|unset|revert)$/i;
+    // split on commas outside quotes
+    const splitList = (v) => { const out = []; let cur = '', q = ''; for (const ch of v) { if (q) { if (ch === q) q = ''; cur += ch; } else if (ch === '"' || ch === "'") { q = ch; cur += ch; } else if (ch === ',') { out.push(cur); cur = ''; } else cur += ch; } out.push(cur); return out; };
+    const swapFamily = (fam) => { const raw = unq(fam); const n = raw.toLowerCase(); if (GENERIC.test(n)) return fam; const t = hidden.get(n); if (!t) return fam; spell.set(t, raw); return ' ' + t; };
+    // "Candara, serif" (list), "bold 12px/1.2 Candara, serif" (shorthand),
+    // or a whole cssText ('css').
+    const sanitize = (v, shorthand) => {
+      if (typeof v !== 'string' || !v) return v;
+      if (shorthand === 'css') {
+        return v.replace(/(font-family\\s*:\\s*)([^;]+)/gi, (a, k, val) => k + sanitize(val, false))
+          .replace(/((?:^|[;\\s])font\\s*:\\s*)([^;]+)/gi, (a, k, val) => k + sanitize(val, true));
+      }
+      return splitList(v).map((p, i) => {
+        if (shorthand && i === 0) {
+          const m = p.match(/^(.*?\\d[\\w.%]*(?:\\s*\\/\\s*[\\w.%]+)?\\s+)(.+)$/);
+          return m ? m[1] + swapFamily(m[2]).trim() : p;
+        }
+        return swapFamily(p);
+      }).join(',');
+    };
+    // Chrome serializes one-word names bare, others in double quotes.
+    const quoteName = (n) => /^[a-z_][\\w-]*$/i.test(n) ? n : '"' + n + '"';
+    const restore = (v) => {
+      if (typeof v !== 'string' || v.indexOf('q') < 0) return v;
+      return v.replace(/(["']?)\\b(x[0-9a-z]+q[0-9a-z]+)\\b\\1/g, (all, q, t) => byToken.has(t) ? quoteName(spell.get(t) || byToken.get(t)) : all);
+    };
+    const wrapAccessor = (proto, prop, shorthand) => {
+      try {
+        const d = Object.getOwnPropertyDescriptor(proto, prop);
+        if (!d || !d.set || !d.get) return;
+        const h = { get [prop]() { return restore(d.get.call(this)); }, set [prop](v) { d.set.call(this, sanitize(String(v), shorthand)); } };
+        const dd = Object.getOwnPropertyDescriptor(h, prop);
+        tag(dd.get, 'get ' + prop); tag(dd.set, 'set ' + prop);
+        Object.defineProperty(proto, prop, { get: dd.get, set: dd.set, configurable: d.configurable, enumerable: d.enumerable });
+      } catch (e) {}
+    };
+    if (G.CSSStyleDeclaration) {
+      const P = CSSStyleDeclaration.prototype;
+      const _setP = P.setProperty, _getPV = P.getPropertyValue;
+      // camelCase CSS props are served by a named interceptor that loses to the
+      // prototype, so accessors here see every style.fontFamily / style.font.
+      const cssProp = (prop, cssName, shorthand) => {
+        try {
+          const h = { get [prop]() { return restore(_getPV.call(this, cssName)); }, set [prop](v) { _setP.call(this, cssName, sanitize(String(v), shorthand)); } };
+          const dd = Object.getOwnPropertyDescriptor(h, prop);
+          tag(dd.get, 'get ' + prop); tag(dd.set, 'set ' + prop);
+          Object.defineProperty(P, prop, { get: dd.get, set: dd.set, configurable: true, enumerable: true });
+        } catch (e) {}
+      };
+      cssProp('fontFamily', 'font-family', false);
+      cssProp('font', 'font', true);
+      wrapAccessor(P, 'cssText', 'css');
+      patch(P, 'setProperty', (o) => function (name, value) {
+        const a = Array.prototype.slice.call(arguments);
+        const n = String(name).toLowerCase();
+        if (n === 'font-family') a[1] = sanitize(String(value), false); else if (n === 'font') a[1] = sanitize(String(value), true);
+        return o.apply(this, a);
+      });
+      patch(P, 'getPropertyValue', (o) => function () { return restore(o.apply(this, arguments)); });
+    }
+    for (const k of ['CanvasRenderingContext2D', 'OffscreenCanvasRenderingContext2D']) if (G[k]) wrapAccessor(G[k].prototype, 'font', true);
+    if (G.FontFaceSet) {
+      patch(FontFaceSet.prototype, 'check', (o) => function (font) { const a = Array.prototype.slice.call(arguments); if (typeof font === 'string') a[0] = sanitize(font, true); return o.apply(this, a); });
+      patch(FontFaceSet.prototype, 'load', (o) => function (font) { const a = Array.prototype.slice.call(arguments); if (typeof font === 'string') a[0] = sanitize(font, true); return o.apply(this, a); });
+    }
+    if (typeof G.queryLocalFonts === 'function') {
+      patch(G, 'queryLocalFonts', (o) => function () {
+        return o.apply(this, arguments).then((list) => list.filter((f) => !hidden.has(String(f.family).toLowerCase())));
+      });
+    }
+  }
+
   // ---- WebGL vendor / renderer (pages and workers) ----
   if (C.webglVendor || C.webglRenderer) {
     for (const k of ['WebGLRenderingContext', 'WebGL2RenderingContext']) {
@@ -355,7 +445,7 @@ async function launch(opts) {
       if (/already running|in use|lock/i.test(msg)) return { ok: false, reason: 'โปรไฟล์นี้ถูกเปิดค้างอยู่ — ปิดหน้าต่างเบราว์เซอร์เดิมก่อน' };
       return { ok: false, reason: msg };
     }
-    running.set(id, { browser, localProxy, startSrv: null });
+    running.set(id, { browser, localProxy, startSrv: null, exePath });
 
     // UA: the native one is already genuine and matches its Client Hints.
     // Override only when the user typed a custom UA, or in headless mode.
@@ -493,6 +583,7 @@ async function stop(id) {
 }
 async function stopAll() { await Promise.all([...running.keys()].map((id) => stop(id))); }
 function anyRunning() { return running.size > 0; }
+function exePathsInUse() { return [...running.values()].map((r) => r.exePath).filter(Boolean); }
 function isRunning(id) { return running.has(id); }
 
 // ---- cookies ---------------------------------------------------------------
@@ -535,4 +626,4 @@ async function setCookies(id, exePath, userDataDir, cookies) {
 function _browser(id) { const r = running.get(id); return r && r.browser; } // test hook
 function _localProxy(id) { const r = running.get(id); return r && r.localProxy; }
 
-module.exports = { launch, stop, stopAll, anyRunning, isRunning, setOnChange, buildInjection, getCookies, setCookies, _browser, _localProxy };
+module.exports = { launch, stop, stopAll, anyRunning, isRunning, exePathsInUse, setOnChange, buildInjection, getCookies, setCookies, _browser, _localProxy };

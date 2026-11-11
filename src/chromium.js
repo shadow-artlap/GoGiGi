@@ -15,10 +15,21 @@ function init(userData) {
   fs.mkdirSync(cacheDir, { recursive: true });
 }
 
+// "131.0.6778.85" vs "131.0.6778.108" — numeric, part by part.
+function cmpBuild(a, b) {
+  const x = String(a).split('.').map(Number), y = String(b).split('.').map(Number);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] || 0) - (y[i] || 0);
+    if (d) return d;
+  }
+  return 0;
+}
+
+// Installed builds, oldest first (so the last one is the newest).
 async function installedChromes() {
   try {
     const list = await bp.getInstalledBrowsers({ cacheDir });
-    return list.filter((b) => b.browser === bp.Browser.CHROME);
+    return list.filter((b) => b.browser === bp.Browser.CHROME).sort((a, b) => cmpBuild(a.buildId, b.buildId));
   } catch {
     return [];
   }
@@ -71,6 +82,49 @@ async function ensureOnce(progress) {
   }
 }
 
+// Keep the bundled engine on the current stable release: an old Chrome
+// version is itself a fingerprint (real users auto-update within days).
+// Downloads the new build next to the old one, so running profiles keep
+// working; older builds are deleted once nothing runs on them.
+// inUse: executable paths of browsers that are running right now.
+let checking = null;
+function checkUpdate(progress, inUse = []) {
+  if (!checking) checking = checkUpdateOnce(progress, inUse).finally(() => { checking = null; });
+  return checking;
+}
+async function checkUpdateOnce(progress, inUse) {
+  const list = await installedChromes();
+  if (!list.length) return { ok: true, updated: false, installed: false };
+  const cur = list[list.length - 1];
+  let latest;
+  try {
+    latest = await bp.resolveBuildId(bp.Browser.CHROME, bp.detectBrowserPlatform(), 'stable');
+  } catch (e) { return { ok: false, reason: String((e && e.message) || e) }; }
+  let updated = false;
+  if (cmpBuild(latest, cur.buildId) > 0) {
+    if (inflight) await inflight.catch(() => {});
+    try {
+      await bp.install({
+        browser: bp.Browser.CHROME, buildId: latest, cacheDir,
+        downloadProgressCallback: (dl, total) => { try { progress && progress(dl, total); } catch { /* ignore */ } },
+      });
+      updated = true;
+    } catch (e) { return { ok: false, reason: String((e && e.message) || e), current: cur.buildId, latest }; }
+  }
+  await prune(inUse);
+  return { ok: true, updated, from: cur.buildId, current: updated ? latest : cur.buildId, latest };
+}
+// Remove every build except the newest one and any build still running.
+async function prune(inUse = []) {
+  const list = await installedChromes();
+  const norm = (p) => path.resolve(String(p || '')).toLowerCase();
+  const busy = new Set(inUse.map(norm));
+  for (const b of list.slice(0, -1)) {
+    if (busy.has(norm(b.executablePath))) continue;
+    try { await bp.uninstall({ browser: bp.Browser.CHROME, buildId: b.buildId, cacheDir }); } catch (e) { /* locked: next time */ }
+  }
+}
+
 async function getExecutable() {
   const s = await status();
   return s.installed ? s.path : null;
@@ -88,4 +142,4 @@ async function remove() {
   }
 }
 
-module.exports = { init, status, ensure, getExecutable, remove };
+module.exports = { init, status, ensure, getExecutable, remove, checkUpdate, prune, cmpBuild };

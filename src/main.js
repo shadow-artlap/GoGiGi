@@ -8,6 +8,7 @@ const log = require('electron-log');
 const { autoUpdater } = require('electron-updater');
 const profiles = require('./profiles');
 const chromium = require('./chromium');
+const fingerprint = require('./fingerprint');
 const groups = require('./groups');
 const extensions = require('./extensions');
 const proxytest = require('./proxytest');
@@ -254,6 +255,17 @@ ipcMain.handle('chromium:status', () => chromium.status());
 ipcMain.handle('chromium:ensure', () =>
   chromium.ensure((dl, total) => send('chromium:progress', { dl, total })));
 ipcMain.handle('chromium:remove', () => chromium.remove());
+ipcMain.handle('chromium:checkUpdate', () => updateChromium(true));
+
+// Bundled Chromium follows Chrome stable: checked shortly after start and
+// every 6 hours. The download happens in the background; running profiles
+// keep their current build, the next launch uses the new one.
+async function updateChromium(manual) {
+  const r = await chromium.checkUpdate((dl, total) => send('chromium:progress', { dl, total, update: true }), fingerprint.exePathsInUse());
+  if (r.ok && r.updated) { log.info('chromium updated', r.from, '->', r.current); send('chromium:updated', r); }
+  else if (!r.ok) log.warn('chromium update check failed', r.reason);
+  if (manual) return r;
+}
 
 // --- IPC: updates ----------------------------------------------------------
 ipcMain.handle('update:check', async () => {
@@ -289,6 +301,9 @@ if (!gotLock) {
     extensions.init(app.getPath('userData'));
     profiles.setOnChange(() => send('profiles:changed'));
     createWindow();
+
+    setTimeout(() => { updateChromium().catch(() => {}); }, 20000);
+    setInterval(() => { updateChromium().catch(() => {}); }, 6 * 3600 * 1000);
 
     if (!isDev) {
       setTimeout(() => {

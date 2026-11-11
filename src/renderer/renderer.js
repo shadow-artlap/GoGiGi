@@ -328,7 +328,7 @@ function renderExtPicker(selectedIds) {
 async function renderFpPreview() {
   const g = await window.gogigi.profiles.fpPreview(modalSeed);
   if (!g) return;
-  $('fpPreview').textContent = `จอจริง · ${g.hardwareConcurrency} cores · ${g.deviceMemory} GB · ${g.webglRenderer ? shortGpu(g.webglRenderer) : 'GPU จริง'} · noise เฉพาะโปรไฟล์`;
+  $('fpPreview').textContent = `จอจริง · ${g.hardwareConcurrency} cores · ${g.deviceMemory} GB · ${g.webglRenderer ? shortGpu(g.webglRenderer) : 'GPU จริง'} · noise + ชุดฟอนต์เฉพาะโปรไฟล์`;
   $('f_scrw').placeholder = 'จอจริง'; $('f_scrh').placeholder = '(แนะนำ)';
   $('f_hc').placeholder = String(g.hardwareConcurrency); $('f_dm').placeholder = String(g.deviceMemory);
   $('f_glv').placeholder = g.webglVendor || 'GPU จริง (แนะนำ)'; $('f_glr').placeholder = g.webglRenderer || 'GPU จริง (แนะนำ)';
@@ -574,16 +574,20 @@ let chromiumInstalled = false;
 async function refreshChromium() {
   const s = await window.gogigi.chromium.status(); chromiumInstalled = !!s.installed;
   const btn = $('btnChromium'); btn.disabled = false;
-  if (s.installed) { $('chromiumDesc').textContent = `ติดตั้งแล้ว (build ${s.buildId})`; btn.textContent = 'ลบ'; btn.classList.add('danger'); }
+  if (s.installed) { $('chromiumDesc').textContent = `ติดตั้งแล้ว (build ${s.buildId}) · อัปเดตอัตโนมัติตาม Chrome stable`; btn.textContent = 'ลบ'; btn.classList.add('danger'); }
   else { $('chromiumDesc').textContent = 'ยังไม่ได้ดาวน์โหลด (~150MB ครั้งเดียว)'; btn.textContent = 'ดาวน์โหลด'; btn.classList.remove('danger'); }
 }
 function initChromium() {
-  window.gogigi.chromium.onProgress(({ dl, total }) => {
-    if (total) { const pct = Math.round((dl / total) * 100); $('chrBar').style.display = 'block'; $('chrBarFill').style.width = pct + '%'; $('chromiumDesc').textContent = `กำลังดาวน์โหลด Chromium… ${pct}%`; }
+  window.gogigi.chromium.onProgress(({ dl, total, update }) => {
+    if (total) { const pct = Math.round((dl / total) * 100); $('chrBar').style.display = pct >= 100 ? 'none' : 'block'; $('chrBarFill').style.width = pct + '%'; $('chromiumDesc').textContent = `${update ? 'กำลังอัปเดต Chromium เป็นรุ่นล่าสุด' : 'กำลังดาวน์โหลด Chromium'}… ${pct}%`; }
   });
   $('btnChromium').addEventListener('click', async () => {
     if (chromiumInstalled) { if (confirm('ลบ Chromium ที่ดาวน์โหลดไว้?')) { await window.gogigi.chromium.remove(); await refreshChromium(); } }
     else { $('btnChromium').disabled = true; $('chrBar').style.display = 'block'; $('chromiumDesc').textContent = 'กำลังเริ่มดาวน์โหลด…'; const r = await window.gogigi.chromium.ensure(); $('chrBar').style.display = 'none'; if (!r.ok) $('chromiumDesc').textContent = 'ไม่สำเร็จ: ' + r.reason; await refreshChromium(); }
+  });
+  window.gogigi.chromium.onUpdated((r) => {
+    toast('อัปเดต Chromium แล้ว', `${r.from} → ${r.current} — โปรไฟล์ที่เปิดครั้งถัดไปจะใช้รุ่นใหม่`, 'ok');
+    refreshChromium();
   });
   refreshChromium();
 }
