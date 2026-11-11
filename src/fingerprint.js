@@ -583,6 +583,35 @@ async function stop(id) {
 }
 async function stopAll() { await Promise.all([...running.keys()].map((id) => stop(id))); }
 function anyRunning() { return running.size > 0; }
+// "Display window": bring the profile's browser window to the front.
+// Windows won't let a background process steal focus, but restoring a
+// minimized window always raises it — so minimize, then restore to the
+// state it had (normal/maximized), then activate its last active tab.
+async function focus(id) {
+  const r = running.get(id);
+  if (!r) return { ok: false, reason: 'not-running' };
+  let s;
+  try {
+    s = await r.browser.target().createCDPSession();
+    const { targetInfos } = await s.send('Target.getTargets');
+    const pages = targetInfos.filter((t) => t.type === 'page' && !/^(chrome|devtools|chrome-extension):/.test(t.url));
+    if (!pages.length) return { ok: false, reason: 'ไม่มีหน้าต่างเบราว์เซอร์เปิดอยู่' };
+    const target = pages[0]; // most recently active first
+    const { windowId, bounds } = await s.send('Browser.getWindowForTarget', { targetId: target.targetId });
+    const back = bounds.windowState === 'maximized' ? 'maximized' : (bounds.windowState === 'fullscreen' ? 'fullscreen' : 'normal');
+    if (bounds.windowState !== 'minimized') {
+      await s.send('Browser.setWindowBounds', { windowId, bounds: { windowState: 'minimized' } });
+      await new Promise((x) => setTimeout(x, 120));
+    }
+    await s.send('Browser.setWindowBounds', { windowId, bounds: { windowState: back } });
+    await s.send('Target.activateTarget', { targetId: target.targetId }).catch(() => {});
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: String((e && e.message) || e) };
+  } finally {
+    if (s) s.detach().catch(() => {});
+  }
+}
 function exePathsInUse() { return [...running.values()].map((r) => r.exePath).filter(Boolean); }
 function isRunning(id) { return running.has(id); }
 
@@ -626,4 +655,4 @@ async function setCookies(id, exePath, userDataDir, cookies) {
 function _browser(id) { const r = running.get(id); return r && r.browser; } // test hook
 function _localProxy(id) { const r = running.get(id); return r && r.localProxy; }
 
-module.exports = { launch, stop, stopAll, anyRunning, isRunning, exePathsInUse, setOnChange, buildInjection, getCookies, setCookies, _browser, _localProxy };
+module.exports = { launch, stop, stopAll, anyRunning, isRunning, exePathsInUse, focus, setOnChange, buildInjection, getCookies, setCookies, _browser, _localProxy };

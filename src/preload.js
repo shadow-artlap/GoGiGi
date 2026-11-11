@@ -34,6 +34,7 @@ contextBridge.exposeInMainWorld('gogigi', {
     remove: (id) => ipcRenderer.invoke('profiles:remove', id),
     launch: (id) => ipcRenderer.invoke('profiles:launch', id),
     stop: (id) => ipcRenderer.invoke('profiles:stop', id),
+    focus: (id) => ipcRenderer.invoke('profiles:focus', id),
     openDir: (id) => ipcRenderer.invoke('profiles:openDir', id),
     removeMany: (ids) => ipcRenderer.invoke('profiles:removeMany', ids),
     listTrash: () => ipcRenderer.invoke('profiles:listTrash'),

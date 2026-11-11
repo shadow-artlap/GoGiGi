@@ -97,6 +97,7 @@ body{margin:0;font-family:var(--font);background:var(--bg);color:var(--text);
 .btn.ghost{background:none;border-color:transparent;color:var(--dim)}
 .btn.ghost:hover{background:var(--surface-2);color:var(--text)}
 .btn.sm{padding:6px 11px;font-size:12.5px;border-radius:var(--r-sm)}
+.btn.sm.icon{padding:6px 8px;display:inline-flex;align-items:center;justify-content:center;color:var(--accent)}
 .btn.danger{color:var(--danger);border-color:transparent;background:none}
 .btn.danger:hover{background:var(--danger-weak)}
 .btn:disabled{opacity:.45;cursor:default;transform:none}

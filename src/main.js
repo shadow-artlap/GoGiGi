@@ -210,6 +210,7 @@ ipcMain.handle('cookies:export', async (_e, id) => {
   return { ok: true, count: r.cookies.length, path: save.filePath };
 });
 ipcMain.handle('profiles:stop', (_e, id) => profiles.stop(id));
+ipcMain.handle('profiles:focus', (_e, id) => fingerprint.focus(id));
 ipcMain.handle('profiles:openDir', (_e, id) => {
   const dir = profiles.openDir(id);
   try { fs.mkdirSync(dir, { recursive: true }); } catch (e) { /* ignore */ }

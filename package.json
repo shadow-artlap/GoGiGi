@@ -1,6 +1,6 @@
 {
   "name": "gogigi",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "GoGiGi — Electron desktop app with GitHub-based auto-update",
   "main": "src/main.js",
   "author": "GoGiGi",

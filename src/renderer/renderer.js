@@ -53,14 +53,27 @@ const shortGpu = (r) => {
 
 const proxySummary = (p) => (!p || !p.host) ? '<span class="muted">ไม่มี</span>'
   : `<span class="mono">${esc(p.host)}:${esc(p.port)}</span>${p.username ? ' 🔒' : ''}`;
-const proxyKey = (px) => (px && px.host) ? `${px.host}:${px.port}` : '';
+// Profiles are "the same identity" only when they leave through the same exit
+// IP, or log in to the proxy with identical credentials (same session/IP).
+// Same gateway host:port with different usernames = different IPs: fine.
+const proxyKeys = (p) => {
+  const k = [];
+  if (p.proxyInfo && p.proxyInfo.ip) k.push('ip:' + p.proxyInfo.ip);
+  if (p.proxy && p.proxy.host) k.push(`login:${p.proxy.host}:${p.proxy.port}:${p.proxy.username || ''}:${p.proxy.password || ''}`);
+  return k;
+};
+const proxyDupes = (p) => {
+  let n = 0;
+  for (const k of proxyKeys(p)) n = Math.max(n, (proxyUse[k] || 1) - 1);
+  return n;
+};
 const proxyCell = (p) => {
   let h = proxySummary(p.proxy);
   if (p.proxyInfo && p.proxyInfo.ip) {
     h += `<div class="sub"><span class="flag">${p.proxyInfo.flag || ''}</span> <span class="mono">${esc(p.proxyInfo.ip)}</span>${p.proxyInfo.country ? ' · ' + esc(p.proxyInfo.country) : ''}${p.proxyInfo.latency ? ' · ' + p.proxyInfo.latency + 'ms' : ''}</div>`;
   }
-  const k = proxyKey(p.proxy);
-  if (k && proxyUse[k] > 1) h += `<div class="sub warn">⚠ ใช้ร่วม ${proxyUse[k]} โปรไฟล์</div>`;
+  const d = proxyDupes(p);
+  if (d) h += `<div class="sub warn" title="โปรไฟล์เหล่านี้ออกเน็ตด้วย IP เดียวกัน เว็บอาจผูกบัญชีเข้าด้วยกันได้ — ใช้ proxy/session คนละตัว">⚠ IP ซ้ำกับอีก ${d} โปรไฟล์</div>`;
   return h;
 };
 const readProxyForm = () => {
@@ -112,7 +125,7 @@ function renderTable() {
   const trash = viewMode === 'trash';
   const items = visibleProfiles();
   proxyUse = {};
-  for (const p of allProfiles) { const k = proxyKey(p.proxy); if (k) proxyUse[k] = (proxyUse[k] || 0) + 1; }
+  for (const p of allProfiles) for (const k of proxyKeys(p)) proxyUse[k] = (proxyUse[k] || 0) + 1;
 
   const total = items.length;
   const pages = Math.max(1, Math.ceil(total / pageSize));
@@ -144,7 +157,8 @@ function renderTable() {
       const primary = isLaunching
         ? `<button class="btn sm" disabled>กำลังเปิด…</button>`
         : (p.running
-          ? `<button class="btn sm" data-act="stop" data-id="${p.id}">หยุด</button>`
+          ? `<button class="btn sm icon" data-act="focus" data-id="${p.id}" title="แสดงหน้าต่าง" aria-label="แสดงหน้าต่าง"><svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1.75" y="2.75" width="12.5" height="10.5" rx="1.5"/><path d="M1.75 5.75h12.5"/></svg></button>
+            <button class="btn sm" data-act="stop" data-id="${p.id}">หยุด</button>`
           : `<button class="btn sm primary" data-act="launch" data-id="${p.id}">เปิด</button>`);
       actions = `${primary}
         <button class="btn sm ghost" data-act="edit" data-id="${p.id}">แก้ไข</button>
@@ -242,6 +256,10 @@ async function onAction(act, id, ev) {
     if (!r.ok) toast('ทดสอบ proxy ไม่สำเร็จ', r.reason, 'err');
     else toast(`${r.flag || ''} ${r.ip}`, `${r.country}${r.city ? ' · ' + r.city : ''} · ${r.latency}ms`, 'ok');
     await loadProfiles();
+  } else if (act === 'focus') {
+    const r = await window.gogigi.profiles.focus(id);
+    if (!r.ok) toast('แสดงหน้าต่างไม่ได้', r.reason === 'not-running' ? 'โปรไฟล์นี้ปิดไปแล้ว' : r.reason, 'err');
+    if (r.reason === 'not-running') await loadProfiles();
   } else if (act === 'stop') { await window.gogigi.profiles.stop(id); await loadProfiles(); }
   else if (act === 'edit') { openModal(p); }
   else if (act === 'dir') { window.gogigi.profiles.openDir(id); }
