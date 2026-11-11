@@ -89,30 +89,98 @@ function buildInjection(fp, seed) {
     }
   } catch(e){}
 
-  // ---- seeded PRNG ----
-  let s = (Math.floor(C.seed * 1e9) || 123456789) >>> 0;
-  const rnd = () => { s = (s * 1664525 + 1013904223) >>> 0; return s / 4294967296; };
+  // ---- deterministic per-profile noise ----
+  // Noise is a pure function of (profile seed, position): repeated reads in the
+  // same profile return identical results (detectors read twice and compare),
+  // while different profiles produce different hashes.
+  const SEEDI = (Math.floor(C.seed * 4294967295) >>> 0) || 0x9e3779b9;
+  const mix = (a) => { a = Math.imul(a ^ (a >>> 16), 0x7feb352d); a = Math.imul(a ^ (a >>> 15), 0x846ca68b); return (a ^ (a >>> 16)) >>> 0; };
+  const hk = (a, b) => mix(SEEDI ^ mix((a | 0) ^ Math.imul(b | 0, 0x9e3779b1)));
+  const noisePixels = (data, x0, y0, w) => {
+    if (!w) return;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] === 0) continue; // blank stays blank
+      const p = i >> 2; const h = hk(x0 + (p % w), y0 + ((p / w) | 0));
+      if (h % 7 !== 0) continue;
+      data[i + ((h >>> 3) % 3)] ^= 1;
+    }
+  };
 
-  // ---- canvas noise (deterministic per profile, undetectable wrappers) ----
   if (C.canvasNoise) {
     const _get = CanvasRenderingContext2D.prototype.getImageData;
     const _put = CanvasRenderingContext2D.prototype.putImageData;
-    const perturb = (canvas) => {
-      try {
-        const ctx = canvas.getContext('2d'); if (!ctx) return;
-        const w = canvas.width, h = canvas.height; if (!w || !h || w * h > 4000000) return;
-        const img = _get.call(ctx, 0, 0, w, h); const d = img.data;
-        for (let i = 0; i < d.length; i += (Math.floor(rnd() * 673) + 311) * 4) { d[i] = d[i] ^ (rnd() < 0.5 ? 1 : 0); }
-        _put.call(ctx, img, 0, 0);
-      } catch(e){}
+    const _toDataURL = HTMLCanvasElement.prototype.toDataURL;
+    const _toBlob = HTMLCanvasElement.prototype.toBlob;
+    // Export from a noised copy; the page's own canvas is never modified.
+    const noisedCopy = (src) => {
+      const w = src.width, h = src.height;
+      if (!w || !h || w * h > 16000000) return null;
+      const t = document.createElement('canvas'); t.width = w; t.height = h;
+      const tc = t.getContext('2d'); tc.drawImage(src, 0, 0);
+      const img = _get.call(tc, 0, 0, w, h); noisePixels(img.data, 0, 0, w); _put.call(tc, img, 0, 0);
+      return t;
     };
-    patch(HTMLCanvasElement.prototype, 'toDataURL', (o) => function () { perturb(this); return o.apply(this, arguments); });
-    patch(HTMLCanvasElement.prototype, 'toBlob', (o) => function () { perturb(this); return o.apply(this, arguments); });
-    patch(CanvasRenderingContext2D.prototype, 'getImageData', (o) => function () {
+    patch(HTMLCanvasElement.prototype, 'toDataURL', (o) => function () {
+      try { const c = noisedCopy(this); if (c) return _toDataURL.apply(c, arguments); } catch (e) {}
+      return o.apply(this, arguments);
+    });
+    patch(HTMLCanvasElement.prototype, 'toBlob', (o) => function () {
+      try { const c = noisedCopy(this); if (c) return _toBlob.apply(c, arguments); } catch (e) {}
+      return o.apply(this, arguments);
+    });
+    patch(CanvasRenderingContext2D.prototype, 'getImageData', (o) => function (sx, sy) {
       const d = o.apply(this, arguments);
-      try { const a = d.data; for (let i = 0; i < a.length; i += (Math.floor(rnd() * 1009) + 503) * 4) { a[i] = a[i] ^ 1; } } catch(e){}
+      try { noisePixels(d.data, sx | 0, sy | 0, d.width); } catch (e) {}
       return d;
     });
+    const rp = (proto) => patch(proto, 'readPixels', (o) => function (x, y, w, h, format, type, pixels) {
+      const r = o.apply(this, arguments);
+      try { if (pixels instanceof Uint8Array && format === 0x1908 && type === 0x1401) noisePixels(pixels, x | 0, y | 0, w | 0); } catch (e) {}
+      return r;
+    });
+    try { rp(WebGLRenderingContext.prototype); } catch (e) {}
+    try { rp(WebGL2RenderingContext.prototype); } catch (e) {}
+
+    // Text metrics: tiny per-profile width offset (< 0.01px) on genuine objects.
+    try {
+      const TM = TextMetrics.prototype;
+      const wd = Object.getOwnPropertyDescriptor(TM, 'width');
+      const deltas = new WeakMap();
+      patch(CanvasRenderingContext2D.prototype, 'measureText', (o) => function (text) {
+        const m = o.apply(this, arguments);
+        try {
+          let th = 0; const st = String(text);
+          for (let i = 0; i < st.length; i++) th = Math.imul(th ^ st.charCodeAt(i), 16777619);
+          deltas.set(m, ((hk(th, 977) % 1000) / 1000 - 0.5) * 0.02);
+        } catch (e) {}
+        return m;
+      });
+      if (wd && wd.get) {
+        const g = function width() { const v = wd.get.call(this); const dl = deltas.get(this); return dl ? v + dl : v; };
+        tag(g, 'get width');
+        Object.defineProperty(TM, 'width', { get: g, configurable: wd.configurable, enumerable: wd.enumerable });
+      }
+    } catch (e) {}
+
+    // Audio: deterministic, applied once per buffer channel.
+    try {
+      const _gcd = AudioBuffer.prototype.getChannelData;
+      const done = new WeakMap();
+      const noiseCh = (buf, ch) => {
+        let set = done.get(buf); if (!set) { set = new Set(); done.set(buf, set); }
+        if (set.has(ch)) return; set.add(ch);
+        const a = _gcd.call(buf, ch);
+        for (let i = 0; i < a.length; i++) { const h = hk(i, ch + 101); if (h % 100 === 0) a[i] += ((h >>> 8) % 1000 / 1000 - 0.5) * 1e-6; }
+      };
+      patch(AudioBuffer.prototype, 'getChannelData', (o) => function (ch) { try { noiseCh(this, ch); } catch (e) {} return o.apply(this, arguments); });
+      patch(AudioBuffer.prototype, 'copyFromChannel', (o) => function (dest, ch) { try { noiseCh(this, ch); } catch (e) {} return o.apply(this, arguments); });
+      if (window.AnalyserNode) {
+        patch(AnalyserNode.prototype, 'getFloatFrequencyData', (o) => function (arr) {
+          o.apply(this, arguments);
+          try { for (let i = 0; i < arr.length; i++) { const h = hk(i, 7); if (h % 10 === 0) arr[i] += ((h >>> 8) % 1000 / 1000 - 0.5) * 1e-3; } } catch (e) {}
+        });
+      }
+    } catch (e) {}
   }
 
   // ---- WebGL vendor / renderer ----
@@ -125,16 +193,6 @@ function buildInjection(fp, seed) {
     try { gl(WebGLRenderingContext.prototype); } catch(e){}
     try { gl(WebGL2RenderingContext.prototype); } catch(e){}
   }
-
-  // ---- AudioContext subtle noise ----
-  try {
-    if (window.AnalyserNode) {
-      patch(AnalyserNode.prototype, 'getFloatFrequencyData', (o) => function (arr) {
-        o.call(this, arr);
-        try { for (let i = 0; i < arr.length; i += 97) arr[i] = arr[i] + (rnd() - 0.5) * 1e-3; } catch(e){}
-      });
-    }
-  } catch(e){}
 
   // ---- WebRTC disable ----
   if (C.webrtcDisabled) {
