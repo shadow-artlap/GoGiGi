@@ -5,11 +5,12 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { readJson, writeJson } = require('./jsonstore');
 
 let FILE = '';
 function init(userData) { FILE = path.join(userData, 'extensions.json'); }
-function read() { try { return JSON.parse(fs.readFileSync(FILE, 'utf8')); } catch { return []; } }
-function write(l) { fs.mkdirSync(path.dirname(FILE), { recursive: true }); fs.writeFileSync(FILE, JSON.stringify(l, null, 2)); }
+function read() { const l = readJson(FILE, []); return Array.isArray(l) ? l : []; }
+function write(l) { writeJson(FILE, l); }
 
 function list() {
   return read().map((e) => ({ ...e, exists: fs.existsSync(e.path) }));

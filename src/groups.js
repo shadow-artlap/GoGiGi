@@ -3,6 +3,7 @@
 // Profile groups (folders). Stored as userData/groups.json.
 const fs = require('fs');
 const path = require('path');
+const { readJson, writeJson } = require('./jsonstore');
 const crypto = require('crypto');
 
 let FILE = '';
@@ -10,13 +11,8 @@ let FILE = '';
 function init(userData) {
   FILE = path.join(userData, 'groups.json');
 }
-function read() {
-  try { return JSON.parse(fs.readFileSync(FILE, 'utf8')); } catch { return []; }
-}
-function write(list) {
-  fs.mkdirSync(path.dirname(FILE), { recursive: true });
-  fs.writeFileSync(FILE, JSON.stringify(list, null, 2));
-}
+function read() { const l = readJson(FILE, []); return Array.isArray(l) ? l : []; }
+function write(list) { writeJson(FILE, list); }
 
 function list() { return read(); }
 

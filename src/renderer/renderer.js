@@ -37,6 +37,7 @@ document.querySelectorAll('.side-nav button').forEach((btn) => {
 let allProfiles = [], trashProfiles = [], allGroups = [], allExtensions = [], browsersList = [];
 let selected = new Set();
 let launching = new Set();
+let bulkRun = null; // bulk 'open selected' progress
 let lastProxyInfo = null;
 let proxyUse = {};
 let viewMode = 'all';            // 'all' | 'trash'
@@ -199,6 +200,8 @@ function updateBulk() {
   $('bulkbar').style.display = selected.size ? 'flex' : 'none';
   $('bulkCount').textContent = `เลือก ${selected.size} รายการ`;
   $('bulkGroup').style.display = trash ? 'none' : '';
+  $('bulkOpen').style.display = trash ? 'none' : ''; $('bulkStop').style.display = trash ? 'none' : '';
+  $('bulkOpen').textContent = bulkRun ? `กำลังเปิด… (${bulkRun.done}/${bulkRun.total}) · ยกเลิก` : 'เปิดที่เลือก';
   $('bulkMove').style.display = trash ? 'none' : '';
   $('bulkDelete').style.display = trash ? 'none' : '';
   $('bulkRestore').style.display = trash ? '' : 'none';
@@ -236,7 +239,7 @@ function openMenu(id, anchor) {
   const first = m.querySelector('button:not([disabled])'); if (first) first.focus();
 }
 
-async function onAction(act, id, ev) {
+async function onAction(act, id, ev, opt = {}) {
   const p = allProfiles.find((x) => x.id === id) || trashProfiles.find((x) => x.id === id);
   if (act === 'menu') { openMenu(id, ev.currentTarget || ev.target); return; }
   if (act === 'launch') {
@@ -247,9 +250,10 @@ async function onAction(act, id, ev) {
     try { r = await window.gogigi.profiles.launch(id); }
     catch (e) { r = { ok: false, reason: String((e && e.message) || e) }; }
     finally { launching.delete(id); }
-    if (!r.ok) toast('เปิดไม่สำเร็จ', r.reason, 'err');
-    else toast('เปิดโปรไฟล์แล้ว', r.warning ? `${p.name} — ${r.warning}` : p.name, r.warning ? 'warn' : 'ok');
+    if (!r.ok) toast('เปิดไม่สำเร็จ', `${p ? p.name + ' — ' : ''}${r.reason}`, 'err');
+    else if (!opt.quiet || r.warning) toast('เปิดโปรไฟล์แล้ว', r.warning ? `${p.name} — ${r.warning}` : p.name, r.warning ? 'warn' : 'ok');
     await Promise.all([loadProfiles(), refreshChromium()]);
+    return r;
   } else if (act === 'iptest') {
     toast('กำลังทดสอบ proxy', p.name);
     const r = await window.gogigi.proxy.testProfile(id);
@@ -450,6 +454,29 @@ function initProfilesUI() {
     const items = visibleProfiles().slice(page * pageSize, page * pageSize + pageSize);
     items.forEach((p) => (e.target.checked ? selected.add(p.id) : selected.delete(p.id)));
     renderTable();
+  });
+  // Open many: one at a time, a few seconds apart. Opening every account on
+  // one IP in the same second is a classic multi-account signal, and 20
+  // Chromes starting together freezes the PC.
+  $('bulkOpen').addEventListener('click', async () => {
+    if (bulkRun) { bulkRun.cancel = true; return; }
+    const ids = [...selected].filter((id) => { const p = allProfiles.find((x) => x.id === id); return p && !p.running && !launching.has(id); });
+    if (!ids.length) { toast('ไม่มีโปรไฟล์ให้เปิด', 'โปรไฟล์ที่เลือกเปิดอยู่แล้ว'); return; }
+    bulkRun = { total: ids.length, done: 0, cancel: false, fail: 0 };
+    renderTable();
+    for (const id of ids) {
+      if (bulkRun.cancel) break;
+      await onAction('launch', id, null, { quiet: true }).then((r) => { if (!r || !r.ok) bulkRun.fail++; });
+      bulkRun.done++; renderTable();
+      if (bulkRun.done < ids.length && !bulkRun.cancel) await new Promise((x) => setTimeout(x, 3000 + Math.random() * 3000));
+    }
+    const b = bulkRun; bulkRun = null; renderTable();
+    toast(b.cancel ? 'หยุดการเปิดแล้ว' : 'เปิดครบแล้ว', `เปิด ${b.done - b.fail}/${b.total} โปรไฟล์${b.fail ? ` · ไม่สำเร็จ ${b.fail}` : ''}`, b.fail ? 'warn' : 'ok');
+  });
+  $('bulkStop').addEventListener('click', async () => {
+    const ids = [...selected].filter((id) => { const p = allProfiles.find((x) => x.id === id); return p && p.running; });
+    await Promise.all(ids.map((id) => window.gogigi.profiles.stop(id)));
+    await loadProfiles(); toast('หยุดแล้ว', `${ids.length} โปรไฟล์`);
   });
   $('bulkMove').addEventListener('click', async () => {
     const n = selected.size;

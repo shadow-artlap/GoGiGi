@@ -6,6 +6,7 @@
 // Profiles launch through the fingerprint engine (puppeteer/CDP).
 
 const fs = require('fs');
+const { readJson, writeJson } = require('./jsonstore');
 const path = require('path');
 const crypto = require('crypto');
 const fingerprint = require('./fingerprint');
@@ -25,12 +26,17 @@ function init(app) {
 }
 
 // ---- storage --------------------------------------------------------------
-function readIndex() {
-  try { return JSON.parse(fs.readFileSync(INDEX_FILE, 'utf8')); } catch { return []; }
-}
-function writeIndex(list) {
-  fs.mkdirSync(path.dirname(INDEX_FILE), { recursive: true });
-  fs.writeFileSync(INDEX_FILE, JSON.stringify(list, null, 2));
+function readIndex() { const l = readJson(INDEX_FILE, []); return Array.isArray(l) ? l : []; }
+function writeIndex(list) { writeJson(INDEX_FILE, list); }
+// Change ONE profile against the current file — for code that awaited in
+// between (launch): writing back a list read seconds earlier would undo
+// edits, new profiles and other launches made meanwhile.
+function patchProfile(id, fields) {
+  const items = readIndex();
+  const p = items.find((x) => x.id === id);
+  if (!p) return;
+  Object.assign(p, fields);
+  writeIndex(items);
 }
 function profileDir(id) { return path.join(PROFILES_DIR, id); }
 
@@ -314,8 +320,9 @@ async function launch(id, exeOverride, opts = {}) {
       proxy: profile.proxy, fp: eff, meta, tabs: profile.tabs || [],
       headless: !!opts.headless, seedKey,
     });
-    if (r.ok) profile.lastUsedAt = Date.now();
-    writeIndex(items); // persists lastUsedAt and any freshly detected proxyInfo
+    const changes = { proxyInfo: profile.proxyInfo };
+    if (r.ok) changes.lastUsedAt = Date.now();
+    patchProfile(id, changes); // only this profile's lastUsedAt / fresh proxyInfo
     if (r.ok && proxyWarn) r.warning = proxyWarn;
     return r;
   } catch (e) {

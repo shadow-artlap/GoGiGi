@@ -40,8 +40,7 @@ function readSettings() {
 }
 function writeSettings(next) {
   try {
-    fs.mkdirSync(path.dirname(SETTINGS_PATH), { recursive: true });
-    fs.writeFileSync(SETTINGS_PATH, JSON.stringify(next, null, 2));
+    require('./jsonstore').writeJson(SETTINGS_PATH, next);
     return true;
   } catch (e) {
     log.warn('writeSettings failed', e);
