@@ -93,13 +93,8 @@ function buildInjection(fp, seed, scope = 'page') {
     }
   } else {
     if (C.deviceMemory && G.Navigator) defProto(Navigator.prototype, 'deviceMemory', C.deviceMemory);
-    // Notification permission consistency (classic automation tell)
-    if (G.Permissions) patch(Permissions.prototype, 'query', (o) => function (p) {
-      if (this instanceof Permissions && p && p.name === 'notifications' && G.Notification) {
-        return Promise.resolve(Object.setPrototypeOf({ state: Notification.permission === 'default' ? 'prompt' : Notification.permission, onchange: null }, PermissionStatus.prototype));
-      }
-      return o.call(this, p);
-    });
+    // (No Permissions.query patch: a headful browser is already consistent, and
+    //  a fake PermissionStatus throws "Illegal invocation" on addEventListener.)
   }
 
   // ---- deterministic per-profile noise ----
@@ -328,6 +323,57 @@ function buildInjection(fp, seed, scope = 'page') {
 }
 
 const ProxyChain = require('proxy-chain');
+
+// ---- cookie vault -----------------------------------------------------------
+// Chrome writes cookies to disk only every ~30s and always drops session
+// cookies on exit, so a crash, Task-Manager kill or power-off right after a
+// login loses it (verified). We keep our own snapshot every few seconds,
+// encrypted with the OS (DPAPI via Electron safeStorage — never plaintext),
+// and on the next launch add back any cookie the browser no longer has.
+// Restore is "missing only": it never overwrites a value the browser kept,
+// so a fresher rotated session token can't be replaced by an older one.
+const VAULT_EVERY = 10000;
+let safeStorage = null;
+try { safeStorage = require('electron').safeStorage; } catch (e) { /* not in Electron */ }
+const vaultFile = (udd) => path.join(udd, 'GoGiGi Cookies.vault');
+const canVault = () => { try { return !!(safeStorage && safeStorage.isEncryptionAvailable()); } catch (e) { return false; } };
+const ckKey = (c) => `${c.name}\n${c.domain}\n${c.path}\n${c.partitionKey ? JSON.stringify(c.partitionKey) : ''}`;
+async function vaultSave(id) {
+  const r = running.get(id);
+  if (!r || !canVault() || !r.browser.connected) return;
+  const s = await r.browser.target().createCDPSession();
+  try {
+    const { cookies } = await s.send('Storage.getCookies');
+    const f = vaultFile(r.userDataDir);
+    const tmp = f + '.tmp';
+    fs.writeFileSync(tmp, safeStorage.encryptString(JSON.stringify({ t: Date.now(), cookies })));
+    fs.renameSync(tmp, f);
+  } finally { s.detach().catch(() => {}); }
+}
+async function vaultRestore(session, udd) {
+  if (!canVault()) return 0;
+  let saved;
+  try { saved = JSON.parse(safeStorage.decryptString(fs.readFileSync(vaultFile(udd)))).cookies || []; } catch (e) { return 0; }
+  try {
+    const now = Date.now() / 1000;
+    const { cookies: cur } = await session.send('Storage.getCookies');
+    const have = new Set(cur.map(ckKey));
+    const todo = saved
+      .filter((c) => !have.has(ckKey(c)) && (c.session || !(c.expires > 0) || c.expires > now))
+      .map((c) => {
+        const p = { name: c.name, value: c.value, domain: c.domain, path: c.path, secure: c.secure, httpOnly: c.httpOnly, sameSite: c.sameSite, priority: c.priority, sourceScheme: c.sourceScheme, sourcePort: c.sourcePort };
+        if (!c.session && c.expires > 0) p.expires = c.expires; // session cookies stay session cookies
+        if (c.partitionKey) p.partitionKey = c.partitionKey;
+        Object.keys(p).forEach((k) => p[k] === undefined && delete p[k]);
+        return p;
+      });
+    if (!todo.length) return 0;
+    try { await session.send('Storage.setCookies', { cookies: todo }); return todo.length; } catch (e) { /* one bad cookie: go one by one */ }
+    let n = 0;
+    for (const c of todo) { try { await session.send('Storage.setCookies', { cookies: [c] }); n++; } catch (e) {} }
+    return n;
+  } catch (e) { return 0; }
+}
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -445,7 +491,7 @@ async function launch(opts) {
       if (/already running|in use|lock/i.test(msg)) return { ok: false, reason: 'โปรไฟล์นี้ถูกเปิดค้างอยู่ — ปิดหน้าต่างเบราว์เซอร์เดิมก่อน' };
       return { ok: false, reason: msg };
     }
-    running.set(id, { browser, localProxy, startSrv: null, exePath });
+    running.set(id, { browser, localProxy, startSrv: null, exePath, userDataDir });
 
     // UA: the native one is already genuine and matches its Client Hints.
     // Override only when the user typed a custom UA, or in headless mode.
@@ -460,6 +506,8 @@ async function launch(opts) {
     }
     const fpEff = { ...fp, userAgent: ua };
     const seed = seedFromId(seedKey || id);
+    let kickT = null;
+    const kickVault = () => { clearTimeout(kickT); kickT = setTimeout(() => { vaultSave(id).catch(() => {}); }, 1500); };
     const pageScript = buildInjection(fpEff, seed, 'page');
     const workerScript = buildInjection(fpEff, seed, 'worker');
     const hc = Number(fp.hardwareConcurrency) || 0;
@@ -489,6 +537,8 @@ async function launch(opts) {
         // Renderer-opened tabs/popups (have an opener) start paused correctly;
         // never reload those — it would break sign-in popups and POST results.
         if (type === 'page' && !session._target()._getTargetInfo().openerId) watchMiss(session);
+        // Logins end in a page load: snapshot cookies right after, not up to 10s later.
+        if (type === 'page') session.on('Page.loadEventFired', kickVault);
       } else if (type === 'worker' || type === 'shared_worker') {
         all.push(send('Runtime.evaluate', { expression: workerScript }));
         if (ua) all.push(send('Network.setUserAgentOverride', { userAgent: ua, acceptLanguage: langs || undefined, platform: 'Win32', userAgentMetadata: uaMeta }));
@@ -538,6 +588,11 @@ async function launch(opts) {
     // First tab: GoGiGi start page (served on loopback — a secure context, so
     // copy-to-clipboard works). Configured tabs open blank, get the overrides,
     // then navigate — no race with the first script.
+    // Put back cookies the browser lost (session cookies, or the last seconds
+    // before a crash / power-off) BEFORE any site loads.
+    const restored = await vaultRestore(rootSession, userDataDir);
+    running.get(id).vaultTimer = setInterval(() => { vaultSave(id).catch(() => {}); }, VAULT_EVERY);
+
     startSrv = await serveStartPage(startpage.buildHtml(meta, fpEff));
     running.get(id).startSrv = startSrv;
     const startUrl = startSrv ? `http://127.0.0.1:${startSrv.address().port}/` : 'about:blank';
@@ -556,11 +611,12 @@ async function launch(opts) {
     browser.on('disconnected', () => {
       const r = running.get(id);
       running.delete(id);
+      if (r && r.vaultTimer) clearInterval(r.vaultTimer);
       if (r && r.localProxy) ProxyChain.closeAnonymizedProxy(r.localProxy, true).catch(() => {});
       if (r && r.startSrv) try { r.startSrv.close(); } catch (e) {}
       if (onChange) onChange();
     });
-    return { ok: true };
+    return { ok: true, restoredCookies: restored };
   } catch (e) {
     if (!running.has(id)) {
       if (localProxy) ProxyChain.closeAnonymizedProxy(localProxy, true).catch(() => {});
@@ -575,6 +631,8 @@ async function launch(opts) {
 async function stop(id) {
   const r = running.get(id);
   if (!r) return { ok: false, reason: 'not-running' };
+  if (r.vaultTimer) clearInterval(r.vaultTimer);
+  await vaultSave(id).catch(() => {}); // final snapshot, then a clean close (Chrome flushes)
   try { await r.browser.close(); } catch (e) { /* ignore */ }
   running.delete(id);
   if (r.localProxy) await ProxyChain.closeAnonymizedProxy(r.localProxy, true).catch(() => {});

@@ -108,6 +108,11 @@ function createWindow() {
     }
     if (items.length) Menu.buildFromTemplate(items).popup({ window: mainWindow });
   });
+  // Windows log-off / restart / shutdown: close every profile cleanly first
+  // (snapshot cookies + let Chrome flush), instead of being killed mid-write.
+  const endSession = () => { profiles.stopAll().catch(() => {}); };
+  mainWindow.on('query-session-end', endSession);
+  mainWindow.on('session-end', endSession);
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   if (isDev) mainWindow.webContents.openDevTools({ mode: 'detach' });
   mainWindow.on('closed', () => { mainWindow = null; });
@@ -366,6 +371,6 @@ if (!gotLock) {
     e.preventDefault();
     quitting = true;
     const done = () => app.quit();
-    Promise.race([profiles.stopAll(), new Promise((r) => setTimeout(r, 5000))]).then(done, done);
+    Promise.race([profiles.stopAll(), new Promise((r) => setTimeout(r, 10000))]).then(done, done);
   });
 }
